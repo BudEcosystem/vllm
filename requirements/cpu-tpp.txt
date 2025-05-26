@@ -1,10 +1,12 @@
 # Common dependencies
--r requirements-common.txt
+-r common.txt
 
 # Dependencies for CPUs
-torch==2.6.0+cpu; platform_machine != "ppc64le" and platform_machine != "aarch64"
-torch==2.6.0; platform_machine == "aarch64"
-torchvision==0.19.0+cpu; platform_machine != "ppc64le"  # required for the image processor of phi3v, this must be updated alongside torch
+torch==2.7.0+cpu; platform_machine != "ppc64le" and platform_machine != "aarch64"
+torch==2.7.0; platform_machine == "aarch64"
+torchvision==0.21.0+cpu; platform_machine != "ppc64le"  # required for the image processor of phi3v, this must be updated alongside torch
+--extra-index-url https://pytorch-extension.intel.com/release-whl/stable/cpu/us/
+oneccl_bind_pt==2.7.0
 datasets # for benchmark scripts
 ninja 
 setuptools 
