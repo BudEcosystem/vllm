@@ -2,6 +2,7 @@
 """Sequence and its related classes."""
 import copy
 import enum
+import math
 from abc import ABC, abstractmethod
 from array import array
 from collections import defaultdict
@@ -9,7 +10,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence as GenericSequence
 from dataclasses import dataclass, field
 from functools import reduce
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, Union, TYPE_CHECKING
 
 import msgspec
 import torch
@@ -20,6 +21,9 @@ from vllm.multimodal import MultiModalKwargs, MultiModalPlaceholderDict
 from vllm.pooling_params import PoolingParams
 from vllm.prompt_adapter.request import PromptAdapterRequest
 from vllm.sampling_params import RequestOutputKind, SamplingParams
+
+if TYPE_CHECKING:
+    from vllm.hallucination_detection import HallucinationInfo, StreamingScorer
 
 VLLM_TOKEN_ID_ARRAY_TYPE = "l"
 
@@ -490,6 +494,12 @@ class Sequence:
             if self.inputs["type"] == "embeds" else None)
         self.output_logprobs: SampleLogprobs = []
         self.output_text = ""
+        # Hallucination detection info
+        self.hallucination_info: list["HallucinationInfo"] = []
+        self.hallucination_scorer: Optional["StreamingScorer"] = None
+        
+        # Initialize hallucination scorer if enabled
+        self._initialize_hallucination_scorer()
 
         self.status = SequenceStatus.WAITING
         self.stop_reason: Union[int, str, None] = None
@@ -503,6 +513,23 @@ class Sequence:
         self.read_offset = 0
         # Input + output tokens
         self.tokens: Optional[list[str]] = None
+
+    def _initialize_hallucination_scorer(self) -> None:
+        """Initialize hallucination scorer if enabled via environment variable."""
+        try:
+            from vllm import envs
+            if envs.VLLM_ENABLE_HALLUCINATION_DETECTION:
+                from vllm.hallucination_detection import OptimizedWhiteBoxScorer
+                
+                method_name = envs.VLLM_HALLUCINATION_DETECTION_METHOD.lower()
+                method = OptimizedWhiteBoxScorer.METHOD_NORM if method_name == "normalized" else OptimizedWhiteBoxScorer.METHOD_MIN
+                window_size = envs.VLLM_HALLUCINATION_DETECTION_WINDOW_SIZE
+                
+                scorer = OptimizedWhiteBoxScorer()
+                self.hallucination_scorer = scorer.stream_score(window_size=window_size, method=method)
+        except ImportError:
+            # Gracefully handle missing dependencies
+            pass
 
     @property
     def n_blocks(self) -> int:
@@ -630,6 +657,17 @@ class Sequence:
         self.output_logprobs.append(logprobs)
         self.data.append_token_id(token_id, logprobs[token_id].logprob,
                                   token_embed)
+        
+        # Add hallucination detection if enabled
+        if self.hallucination_scorer is not None:
+            # Get the probability of the chosen token
+            chosen_logprob = logprobs[token_id].logprob
+            chosen_prob = math.exp(chosen_logprob)
+            
+            # Update hallucination scorer and get info
+            hallucination_info = self.hallucination_scorer.update(
+                chosen_prob, chosen_logprob)
+            self.hallucination_info.append(hallucination_info)
 
     def get_len(self) -> int:
         return self.data.get_len()

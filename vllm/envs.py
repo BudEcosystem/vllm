@@ -48,6 +48,9 @@ if TYPE_CHECKING:
     VLLM_XLA_CHECK_RECOMPILATION: bool = False
     VLLM_FUSED_MOE_CHUNK_SIZE: int = 64 * 1024
     VLLM_USE_RAY_SPMD_WORKER: bool = False
+    VLLM_ENABLE_HALLUCINATION_DETECTION: bool = False
+    VLLM_HALLUCINATION_DETECTION_METHOD: str = "normalized"
+    VLLM_HALLUCINATION_DETECTION_WINDOW_SIZE: int = 50
     VLLM_USE_RAY_COMPILED_DAG: bool = False
     VLLM_USE_RAY_COMPILED_DAG_CHANNEL_TYPE: str = "auto"
     VLLM_USE_RAY_COMPILED_DAG_OVERLAP_COMM: bool = False
@@ -828,6 +831,18 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # This is used to prevent the kernel from running out of memory.
     "VLLM_MAX_TOKENS_PER_EXPERT_FP4_MOE":
     lambda: int(os.getenv("VLLM_MAX_TOKENS_PER_EXPERT_FP4_MOE", "163840")),
+
+    # Hallucination detection configuration
+    "VLLM_ENABLE_HALLUCINATION_DETECTION":
+    lambda: bool(int(os.getenv("VLLM_ENABLE_HALLUCINATION_DETECTION", "0"))),
+    
+    # Hallucination detection method: "min" or "normalized"
+    "VLLM_HALLUCINATION_DETECTION_METHOD":
+    lambda: os.getenv("VLLM_HALLUCINATION_DETECTION_METHOD", "normalized"),
+    
+    # Window size for streaming hallucination detection
+    "VLLM_HALLUCINATION_DETECTION_WINDOW_SIZE":
+    lambda: int(os.getenv("VLLM_HALLUCINATION_DETECTION_WINDOW_SIZE", "50")),
 }
 
 # --8<-- [end:env-vars-definition]

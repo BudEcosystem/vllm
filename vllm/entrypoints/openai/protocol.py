@@ -1223,6 +1223,10 @@ class CompletionLogProbs(OpenAIBaseModel):
     tokens: list[str] = Field(default_factory=list)
     top_logprobs: list[Optional[dict[str,
                                      float]]] = Field(default_factory=list)
+    # Hallucination detection fields
+    confidence_scores: Optional[list[float]] = Field(default=None)
+    hallucination_probabilities: Optional[list[str]] = Field(default=None)
+    token_log_probabilities: Optional[list[float]] = Field(default=None)
 
 
 class CompletionResponseChoice(OpenAIBaseModel):
@@ -1239,6 +1243,8 @@ class CompletionResponseChoice(OpenAIBaseModel):
     )
     prompt_logprobs: Optional[list[Optional[dict[int, Logprob]]]] = None
     perplexity: Optional[float] = None
+    # Sequence-level hallucination info
+    hallucination_info: Optional[dict[str, Any]] = Field(default=None)
 
 
 class CompletionResponse(OpenAIBaseModel):
@@ -1264,6 +1270,8 @@ class CompletionResponseStreamChoice(OpenAIBaseModel):
             "to stop, None if the completion finished for some other reason "
             "including encountering the EOS token"),
     )
+    # Sequence-level hallucination info
+    hallucination_info: Optional[dict[str, Any]] = Field(default=None)
 
 
 class CompletionStreamResponse(OpenAIBaseModel):
@@ -1415,6 +1423,10 @@ class ChatCompletionLogProbsContent(ChatCompletionLogProb):
     # shared with the super class.
     field_names: ClassVar[Optional[set[str]]] = None
     top_logprobs: list[ChatCompletionLogProb] = Field(default_factory=list)
+    # Hallucination detection fields
+    confidence_score: Optional[float] = None
+    hallucination_probability: Optional[str] = None
+    token_log_probability: Optional[float] = None
 
 
 class ChatCompletionLogProbs(OpenAIBaseModel):
@@ -1430,6 +1442,8 @@ class ChatCompletionResponseChoice(OpenAIBaseModel):
     # not part of the OpenAI spec but included in vLLM for legacy reasons
     stop_reason: Optional[Union[int, str]] = None
     perplexity: Optional[float] = None
+    # Sequence-level hallucination info
+    hallucination_info: Optional[dict[str, Any]] = Field(default=None)
 
 
 class ChatCompletionResponse(OpenAIBaseModel):
@@ -1457,6 +1471,8 @@ class ChatCompletionResponseStreamChoice(OpenAIBaseModel):
     logprobs: Optional[ChatCompletionLogProbs] = None
     finish_reason: Optional[str] = None
     stop_reason: Optional[Union[int, str]] = None
+    # Sequence-level hallucination info
+    hallucination_info: Optional[dict[str, Any]] = Field(default=None)
 
 
 class ChatCompletionStreamResponse(OpenAIBaseModel):

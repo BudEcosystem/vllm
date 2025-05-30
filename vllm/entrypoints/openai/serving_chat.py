@@ -569,6 +569,7 @@ class OpenAIServingChat(OpenAIServing):
                             num_output_top_logprobs=request.top_logprobs,
                             return_as_token_id=request.
                             return_tokens_as_token_ids,
+                            completion_output=output,
                         )
                     else:
                         logprobs = None
@@ -822,13 +823,19 @@ class OpenAIServingChat(OpenAIServing):
                             ])
 
                         # Send the finish response for each request.n only once
+                        # Prepare hallucination info
+                        hallucination_info = None
+                        if output.sequence_hallucination_info:
+                            hallucination_info = output.sequence_hallucination_info.to_dict()
+                        
                         choice_data = ChatCompletionResponseStreamChoice(
                             index=i,
                             delta=delta_message,
                             logprobs=logprobs,
                             finish_reason=output.finish_reason
                             if not auto_tools_called else "tool_calls",
-                            stop_reason=output.stop_reason)
+                            stop_reason=output.stop_reason,
+                            hallucination_info=hallucination_info)
 
                         finish_reason_sent[i] = True
 
@@ -929,6 +936,7 @@ class OpenAIServingChat(OpenAIServing):
                     num_output_top_logprobs=request.top_logprobs,
                     tokenizer=tokenizer,
                     return_as_token_id=request.return_tokens_as_token_ids,
+                    completion_output=output,
                 )
             else:
                 logprobs = None
@@ -1049,6 +1057,11 @@ class OpenAIServingChat(OpenAIServing):
             else:
                 perplexity = None
 
+            # Prepare hallucination info
+            hallucination_info = None
+            if output.sequence_hallucination_info:
+                hallucination_info = output.sequence_hallucination_info.to_dict()
+            
             choice_data = ChatCompletionResponseChoice(
                 index=output.index,
                 message=message,
@@ -1056,7 +1069,8 @@ class OpenAIServingChat(OpenAIServing):
                 finish_reason="tool_calls" if auto_tools_called else
                 output.finish_reason if output.finish_reason else "stop",
                 stop_reason=output.stop_reason,
-                perplexity=perplexity)
+                perplexity=perplexity,
+                hallucination_info=hallucination_info)
             choices.append(choice_data)
 
         if request.echo:
@@ -1125,6 +1139,7 @@ class OpenAIServingChat(OpenAIServing):
         tokenizer: AnyTokenizer,
         num_output_top_logprobs: Optional[int] = None,
         return_as_token_id: Optional[bool] = None,
+        completion_output: Optional[CompletionOutput] = None,
     ) -> ChatCompletionLogProbs:
         """Create OpenAI-style logprobs."""
         logprobs_content: list[ChatCompletionLogProbsContent] = []
@@ -1133,6 +1148,17 @@ class OpenAIServingChat(OpenAIServing):
             return_as_token_id is not None else self.return_tokens_as_token_ids
         for i, token_id in enumerate(token_ids):
             step_top_logprobs = top_logprobs[i]
+            
+            # Get hallucination info if available
+            confidence_score = None
+            hallucination_probability = None
+            token_log_probability = None
+            if completion_output and completion_output.hallucination_info and i < len(completion_output.hallucination_info):
+                info = completion_output.hallucination_info[i]
+                confidence_score = info.confidence_score
+                hallucination_probability = info.risk_level.value
+                token_log_probability = info.token_logprob
+            
             if step_top_logprobs is None or step_top_logprobs.get(
                     token_id) is None:
                 token = tokenizer.decode(token_id)
@@ -1143,6 +1169,9 @@ class OpenAIServingChat(OpenAIServing):
                     ChatCompletionLogProbsContent(
                         token=token,
                         bytes=list(token.encode("utf-8", errors="replace")),
+                        confidence_score=confidence_score,
+                        hallucination_probability=hallucination_probability,
+                        token_log_probability=token_log_probability,
                     ))
             else:
                 step_token = step_top_logprobs[token_id]
@@ -1162,6 +1191,9 @@ class OpenAIServingChat(OpenAIServing):
                         top_logprobs=self._get_top_logprobs(
                             step_top_logprobs, num_output_top_logprobs,
                             tokenizer, should_return_as_token_id),
+                        confidence_score=confidence_score,
+                        hallucination_probability=hallucination_probability,
+                        token_log_probability=token_log_probability,
                     ))
 
         return ChatCompletionLogProbs(content=logprobs_content)

@@ -15,6 +15,7 @@ from vllm.multimodal.inputs import MultiModalPlaceholderDict
 from vllm.sampling_params import RequestOutputKind
 from vllm.sequence import (PromptLogprobs, RequestMetrics, SampleLogprobs,
                            SequenceGroup, SequenceGroupBase, SequenceStatus)
+from vllm.hallucination_detection import HallucinationInfo
 
 logger = init_logger(__name__)
 
@@ -36,6 +37,8 @@ class CompletionOutput:
             to stop, None if the completion finished for some other reason
             including encountering the EOS token.
         lora_request: The LoRA request that was used to generate the output.
+        hallucination_info: Per-token hallucination detection information.
+        sequence_hallucination_info: Overall sequence hallucination information.
     """
 
     index: int
@@ -46,6 +49,8 @@ class CompletionOutput:
     finish_reason: Optional[str] = None
     stop_reason: Union[int, str, None] = None
     lora_request: Optional[LoRARequest] = None
+    hallucination_info: Optional[list[HallucinationInfo]] = None
+    sequence_hallucination_info: Optional[HallucinationInfo] = None
 
     def finished(self) -> bool:
         return self.finish_reason is not None
@@ -57,7 +62,9 @@ class CompletionOutput:
                 f"cumulative_logprob={self.cumulative_logprob}, "
                 f"logprobs={self.logprobs}, "
                 f"finish_reason={self.finish_reason}, "
-                f"stop_reason={self.stop_reason})")
+                f"stop_reason={self.stop_reason}, "
+                f"hallucination_info={self.hallucination_info}, "
+                f"sequence_hallucination_info={self.sequence_hallucination_info})")
 
 
 @dataclass
@@ -158,10 +165,18 @@ class RequestOutput:
                             assert completion.logprobs is not None
                             completion.logprobs.extend(
                                 next_completion.logprobs)
+                        # Merge hallucination info
+                        if next_completion.hallucination_info:
+                            if completion.hallucination_info is None:
+                                completion.hallucination_info = []
+                            completion.hallucination_info.extend(
+                                next_completion.hallucination_info)
                         completion.cumulative_logprob = (
                             next_completion.cumulative_logprob)
                         completion.finish_reason = next_completion.finish_reason
                         completion.stop_reason = next_completion.stop_reason
+                        completion.sequence_hallucination_info = (
+                            next_completion.sequence_hallucination_info)
                     else:
                         # Replace the output with the new one
                         self.outputs[i] = next_completion
@@ -263,7 +278,9 @@ class RequestOutput:
                                          cumulative_logprob=None,
                                          logprobs=None,
                                          finish_reason=None,
-                                         stop_reason=None))
+                                         stop_reason=None,
+                                         hallucination_info=None,
+                                         sequence_hallucination_info=None))
                 output = cached_outputs[i]
 
                 # Init cached output object
@@ -282,15 +299,41 @@ class RequestOutput:
                 output.finish_reason = SequenceStatus.get_finished_reason(
                     seq.status)
                 output.stop_reason = seq.stop_reason
+                
+                # Add hallucination info if available
+                if seq.hallucination_info:
+                    # Handle delta mode
+                    if delta and num_output_tokens > 0:
+                        output.hallucination_info = seq.hallucination_info[-num_output_tokens:]
+                    else:
+                        output.hallucination_info = seq.hallucination_info
+                    # Get sequence-level hallucination info
+                    if seq.hallucination_scorer:
+                        output.sequence_hallucination_info = seq.hallucination_scorer.get_sequence_hallucination_info()
 
             else:
+                # Prepare hallucination info
+                hallucination_info = None
+                sequence_hallucination_info = None
+                if seq.hallucination_info:
+                    # Handle delta mode
+                    if delta and num_output_tokens > 0:
+                        hallucination_info = seq.hallucination_info[-num_output_tokens:]
+                    else:
+                        hallucination_info = seq.hallucination_info
+                    # Get sequence-level hallucination info
+                    if seq.hallucination_scorer:
+                        sequence_hallucination_info = seq.hallucination_scorer.get_sequence_hallucination_info()
+                
                 output = CompletionOutput(
                     top_n_seqs.index(seq), output_text, [output_token_ids]
                     if isinstance(output_token_ids, int) else output_token_ids,
                     seq.get_cumulative_logprob() if include_logprobs else None,
                     output_logprobs,
                     SequenceStatus.get_finished_reason(seq.status),
-                    seq.stop_reason)
+                    seq.stop_reason,
+                    hallucination_info=hallucination_info,
+                    sequence_hallucination_info=sequence_hallucination_info)
 
             outputs.append(output)
 

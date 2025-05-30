@@ -33,7 +33,7 @@ from vllm.entrypoints.openai.serving_models import OpenAIServingModels
 from vllm.inputs.data import (EmbedsPrompt, TokensPrompt, is_embeds_prompt,
                               is_tokens_prompt)
 from vllm.logger import init_logger
-from vllm.outputs import RequestOutput
+from vllm.outputs import CompletionOutput, RequestOutput
 from vllm.sampling_params import BeamSearchParams, SamplingParams
 from vllm.sequence import Logprob
 from vllm.transformers_utils.tokenizer import AnyTokenizer
@@ -364,6 +364,7 @@ class OpenAIServingCompletion(OpenAIServing):
                             initial_text_offset=previous_text_lens[i],
                             return_as_token_id=request.
                             return_tokens_as_token_ids,
+                            completion_output=output,
                         )
                     else:
                         logprobs = None
@@ -373,6 +374,11 @@ class OpenAIServingCompletion(OpenAIServing):
                     finish_reason = output.finish_reason
                     stop_reason = output.stop_reason
 
+                    # Prepare hallucination info for streaming
+                    hallucination_info = None
+                    if output.sequence_hallucination_info:
+                        hallucination_info = output.sequence_hallucination_info.to_dict()
+                    
                     chunk = CompletionStreamResponse(
                         id=request_id,
                         created=created_time,
@@ -384,6 +390,7 @@ class OpenAIServingCompletion(OpenAIServing):
                                 logprobs=logprobs,
                                 finish_reason=finish_reason,
                                 stop_reason=stop_reason,
+                                hallucination_info=hallucination_info,
                             )
                         ])
                     if include_continuous_usage:
@@ -485,6 +492,7 @@ class OpenAIServingCompletion(OpenAIServing):
                         tokenizer=tokenizer,
                         num_output_top_logprobs=request.logprobs,
                         return_as_token_id=request.return_tokens_as_token_ids,
+                        completion_output=output,
                     )
                 else:
                     logprobs = None
@@ -495,6 +503,11 @@ class OpenAIServingCompletion(OpenAIServing):
                 else:
                     perplexity = None
 
+                # Prepare hallucination info
+                hallucination_info = None
+                if output.sequence_hallucination_info:
+                    hallucination_info = output.sequence_hallucination_info.to_dict()
+                
                 choice_data = CompletionResponseChoice(
                     index=len(choices),
                     text=output_text,
@@ -503,6 +516,7 @@ class OpenAIServingCompletion(OpenAIServing):
                     stop_reason=output.stop_reason,
                     prompt_logprobs=final_res.prompt_logprobs,
                     perplexity=perplexity,
+                    hallucination_info=hallucination_info,
                 )
                 choices.append(choice_data)
 
@@ -534,6 +548,7 @@ class OpenAIServingCompletion(OpenAIServing):
         tokenizer: AnyTokenizer,
         initial_text_offset: int = 0,
         return_as_token_id: Optional[bool] = None,
+        completion_output: Optional["CompletionOutput"] = None,
     ) -> CompletionLogProbs:
         """Create logprobs for OpenAI Completion API."""
         out_text_offset: list[int] = []
@@ -591,9 +606,28 @@ class OpenAIServingCompletion(OpenAIServing):
                 out_text_offset.append(out_text_offset[-1] + last_token_len)
             last_token_len = len(token)
 
+        # Add hallucination detection fields if available
+        confidence_scores = None
+        hallucination_probabilities = None
+        token_log_probabilities = None
+        
+        if completion_output and completion_output.hallucination_info:
+            confidence_scores = []
+            hallucination_probabilities = []
+            token_log_probabilities = []
+            
+            for i, info in enumerate(completion_output.hallucination_info):
+                if i < len(token_ids):  # Ensure we don't go out of bounds
+                    confidence_scores.append(info.confidence_score)
+                    hallucination_probabilities.append(info.risk_level.value)
+                    token_log_probabilities.append(info.token_logprob if info.token_logprob is not None else -9999.0)
+        
         return CompletionLogProbs(
             text_offset=out_text_offset,
             token_logprobs=out_token_logprobs,
             tokens=out_tokens,
             top_logprobs=out_top_logprobs,
+            confidence_scores=confidence_scores,
+            hallucination_probabilities=hallucination_probabilities,
+            token_log_probabilities=token_log_probabilities,
         )
