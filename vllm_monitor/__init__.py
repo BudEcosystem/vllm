@@ -22,6 +22,27 @@ from .core import (
     ComponentState,
 )
 
+from .lifecycle_tracker import (
+    LifecycleTracker,
+    LifecycleState,
+    StateTransition,
+    StateCheckpoint,
+    CompatibilityReport,
+    GuardrailPolicy,
+)
+
+from .plugin_system import (
+    PluginManager,
+    PluginRegistry,
+    PluginLoader,
+    PluginInterface,
+    SimplePlugin,
+    PluginType,
+    PluginStatus,
+    PluginMetadata,
+    PluginValidationResult,
+)
+
 from .collectors import (
     StateCollector,
     PerformanceCollector,
@@ -73,6 +94,25 @@ __all__ = [
     "MonitorState",
     "ComponentState",
     
+    # Lifecycle tracking
+    "LifecycleTracker",
+    "LifecycleState",
+    "StateTransition",
+    "StateCheckpoint",
+    "CompatibilityReport",
+    "GuardrailPolicy",
+    
+    # Plugin system
+    "PluginManager",
+    "PluginRegistry",
+    "PluginLoader",
+    "PluginInterface",
+    "SimplePlugin",
+    "PluginType",
+    "PluginStatus",
+    "PluginMetadata",
+    "PluginValidationResult",
+    
     # Collectors
     "StateCollector",
     "PerformanceCollector", 
@@ -97,3 +137,23 @@ __all__ = [
     "LogExporter",
     "ExportManager",
 ]
+
+
+def create_monitor_with_plugins(config: Optional[MonitorConfig] = None) -> VLLMMonitor:
+    """
+    Create a VLLMMonitor instance with lifecycle tracking and plugin system pre-configured.
+    
+    Args:
+        config: Optional monitor configuration
+        
+    Returns:
+        Configured VLLMMonitor instance with plugins and lifecycle tracking ready
+    """
+    monitor = VLLMMonitor(config)
+    monitor.setup_lifecycle_tracking()
+    monitor.setup_plugin_system()
+    return monitor
+
+
+# Export the factory function
+__all__.append("create_monitor_with_plugins")

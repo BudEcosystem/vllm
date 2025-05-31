@@ -1,337 +1,310 @@
-#!/usr/bin/env python3
 """
-Complete vLLM Monitoring System Example
+Complete example demonstrating all vLLM monitoring features.
 
-This example demonstrates how to set up and use the comprehensive vLLM monitoring
-system with all features including:
-- Real-time state tracking
-- Performance monitoring
-- Anomaly detection
-- Failure prediction
-- Self-healing interventions
-- Alerting and export
+This example shows:
+1. Lifecycle tracking with startup/shutdown monitoring
+2. Plugin system with custom plugins
+3. Distributed metrics collection
+4. Guardrails and interventions
+5. Hardware compatibility checking
+6. Runtime hot-reloading
 """
 
-import asyncio
 import time
-import logging
-import os
+import json
+import random
 from pathlib import Path
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-
-# Import vLLM monitoring system
-import sys
-sys.path.append(str(Path(__file__).parent.parent))
-
-from core import (
-    VLLMMonitor, MonitorConfig, ComponentType, ComponentState, StateType, AlertLevel
-)
-from collectors import (
-    StateCollector, PerformanceCollector, ErrorCollector, 
-    RequestCollector, ResourceCollector
-)
-from analyzers import (
-    AnomalyDetector, PerformanceAnalyzer, FailurePredictor, HealthScorer
-)
-from interventions import (
-    InterventionEngine, SelfHealingAgent, GuardrailManager
-)
-from exporters import (
-    ExportManager, ExportConfig, AlertConfig
+# Import monitoring components
+from vllm_monitor import (
+    VLLMMonitor,
+    create_monitor_with_plugins,
+    LifecycleState,
+    StateTransition,
+    GuardrailPolicy,
+    PluginManager,
+    PluginType,
+    DistributedMetricsCollector,
+    WorkerRole,
+    ParallelismType
 )
 
 
-class MockVLLMComponent:
-    """Mock vLLM component for demonstration."""
+def main():
+    print("=== vLLM Comprehensive Monitoring Example ===\n")
     
-    def __init__(self, name: str, component_type: ComponentType):
-        self.name = name
-        self.component_type = component_type
-        self.is_healthy = True
-        self.error_count = 0
-        self.requests_processed = 0
-        
-    def process_request(self):
-        """Simulate request processing."""
-        self.requests_processed += 1
-        # Simulate occasional errors
-        if self.requests_processed % 50 == 0:
-            self.error_count += 1
-        
-    def simulate_load(self):
-        """Simulate varying load conditions."""
-        import random
-        # Randomly process requests
-        for _ in range(random.randint(1, 10)):
-            self.process_request()
-
-
-async def main():
-    """Main demonstration function."""
-    print("🚀 Starting vLLM Monitoring System Demo")
-    print("=" * 50)
+    # 1. Create monitor with plugins and lifecycle tracking
+    print("1. Initializing monitoring system...")
+    monitor = create_monitor_with_plugins()
     
-    # 1. Configure monitoring system
-    monitor_config = MonitorConfig(
-        enabled=True,
-        collection_interval_ms=1000,  # Collect every second for demo
-        enable_async_collection=True,
-        enable_anomaly_detection=True,
-        enable_failure_prediction=True,
-        enable_self_healing=True,
-        enable_guardrails=True,
-        enable_metrics_export=True,
-        enable_logging=True,
-        enable_alerts=True,
-        max_collection_time_us=100.0,
-        sampling_rate=1.0
-    )
+    # Add verbose feedback handler
+    def feedback_handler(level: str, message: str, context: dict):
+        print(f"[{level.upper()}] {message}")
+        if context:
+            print(f"  Context: {json.dumps(context, indent=2)}")
     
-    # 2. Configure export system
-    export_config = ExportConfig(
-        export_interval_seconds=30,  # Export every 30 seconds for demo
-        export_format="json",
-        enable_compression=False,  # Disable for easier inspection
-        retention_hours=1
-    )
+    monitor.lifecycle_tracker.add_feedback_handler(feedback_handler)
+    monitor.plugin_manager.add_feedback_handler(feedback_handler)
     
-    alert_config = AlertConfig(
-        enabled=True,
-        min_alert_level=AlertLevel.WARNING,
-        alert_cooldown_seconds=10.0,  # Short cooldown for demo
-        max_alerts_per_hour=20
-    )
-    
-    # 3. Create mock vLLM components
-    print("📦 Creating mock vLLM components...")
-    components = {
-        "engine_main": MockVLLMComponent("engine_main", ComponentType.ENGINE),
-        "scheduler_0": MockVLLMComponent("scheduler_0", ComponentType.SCHEDULER),
-        "worker_0": MockVLLMComponent("worker_0", ComponentType.WORKER),
-        "worker_1": MockVLLMComponent("worker_1", ComponentType.WORKER),
-        "cache_engine": MockVLLMComponent("cache_engine", ComponentType.CACHE_ENGINE),
-        "model_runner": MockVLLMComponent("model_runner", ComponentType.MODEL_RUNNER),
+    # 2. Track vLLM startup
+    print("\n2. Tracking vLLM startup...")
+    startup_args = {
+        "model": "meta-llama/Llama-2-7b-hf",
+        "tensor_parallel_size": 2,
+        "pipeline_parallel_size": 1,
+        "gpu_memory_utilization": 0.9,
+        "max_model_len": 4096,
+        "device": "cuda"
     }
     
-    # 4. Initialize monitoring system
-    print("🔧 Initializing monitoring system...")
-    monitor = VLLMMonitor(monitor_config)
+    checkpoint = monitor.track_lifecycle_state(
+        LifecycleState.INITIALIZING,
+        StateTransition.STARTUP,
+        startup_args
+    )
+    print(f"Startup checkpoint created: {checkpoint.timestamp}")
     
-    # 5. Register components
-    print("📋 Registering components...")
-    for comp_id, component in components.items():
-        monitor.register_component(component, comp_id, component.component_type)
+    # 3. Create and register custom plugins
+    print("\n3. Creating custom plugins...")
     
-    # 6. Setup collectors
-    print("📊 Setting up data collectors...")
+    # Create a custom collector plugin
+    monitor.plugin_manager.create_plugin(
+        name="custom_latency_collector",
+        plugin_type="collector",
+        execute_code="""
+import random
+latency = random.uniform(10, 100)
+return {
+    'latency_ms': latency,
+    'timestamp': time.time(),
+    'status': 'healthy' if latency < 50 else 'degraded'
+}
+""",
+        description="Collects latency metrics"
+    )
     
-    # State collector
-    state_collector = StateCollector(monitor._components)
-    monitor.add_collector(state_collector)
+    # Create a guardrail for high latency
+    monitor.plugin_manager.create_guardrail(
+        name="high_latency_detector",
+        description="Detects high latency and triggers optimization",
+        condition_code="""
+# Check if latency exceeds threshold
+latency_data = checkpoint.metrics.get('custom_latency', {})
+return latency_data.get('latency_ms', 0) > 50
+""",
+        intervention="optimize_performance",
+        severity="warning"
+    )
     
-    # Performance collector
-    perf_collector = PerformanceCollector()
-    monitor.add_collector(perf_collector)
+    # Create an intervention
+    monitor.plugin_manager.create_intervention(
+        name="optimize_performance",
+        description="Optimize performance when high latency detected",
+        action_code="""
+print("Optimizing performance...")
+# In real scenario, this would adjust batch sizes, enable optimizations, etc.
+context['optimized'] = True
+""",
+        required_context=[]
+    )
     
-    # Error collector
-    error_collector = ErrorCollector()
-    monitor.add_collector(error_collector)
+    # 4. Set up distributed metrics collection
+    print("\n4. Setting up distributed metrics...")
+    dist_collector = DistributedMetricsCollector(
+        node_id="main-node",
+        role=WorkerRole.MASTER
+    )
     
-    # Request collector
-    request_collector = RequestCollector()
-    monitor.add_collector(request_collector)
+    # Register distributed workers
+    dist_collector.register_worker("worker-0", WorkerRole.PREFILL, "main-node", 12345, gpu_id=0)
+    dist_collector.register_worker("worker-1", WorkerRole.DECODE, "main-node", 12346, gpu_id=1)
     
-    # Resource collector
-    resource_collector = ResourceCollector()
-    monitor.add_collector(resource_collector)
+    # Register distributed collector as a plugin
+    dist_plugin = dist_collector.create_plugin()
+    monitor.register_plugin(dist_plugin)
     
-    # 7. Setup analyzers
-    print("🔍 Setting up analyzers...")
+    # Start distributed collection
+    dist_collector.start_collection(interval=2.0)
     
-    # Anomaly detector
-    anomaly_detector = AnomalyDetector(sensitivity=2.0, min_samples=5)
-    monitor.add_analyzer(anomaly_detector)
+    # 5. Demonstrate lifecycle state transitions
+    print("\n5. Demonstrating lifecycle transitions...")
     
-    # Performance analyzer
-    perf_analyzer = PerformanceAnalyzer(lookback_hours=0.1)  # 6 minutes for demo
-    monitor.add_analyzer(perf_analyzer)
+    # Transition through states
+    states = [
+        (LifecycleState.LOADING_MODEL, StateTransition.STARTUP),
+        (LifecycleState.ALLOCATING_MEMORY, StateTransition.STARTUP),
+        (LifecycleState.READY, StateTransition.STARTUP),
+        (LifecycleState.SERVING, StateTransition.STARTUP)
+    ]
     
-    # Failure predictor
-    failure_predictor = FailurePredictor(prediction_horizon_hours=0.5)  # 30 minutes for demo
-    monitor.add_analyzer(failure_predictor)
+    for state, transition in states:
+        time.sleep(0.5)
+        checkpoint = monitor.track_lifecycle_state(state, transition)
+        print(f"Transitioned to: {state.name}")
     
-    # Health scorer
-    health_scorer = HealthScorer()
-    monitor.add_analyzer(health_scorer)
+    # 6. Simulate monitoring with guardrails
+    print("\n6. Running monitoring simulation...")
     
-    # 8. Setup self-healing system
-    print("🏥 Setting up self-healing system...")
-    
-    self_healing_agent = SelfHealingAgent(monitor_config, monitor._components)
-    
-    # Setup guardrails
-    guardrail_manager = GuardrailManager(monitor_config)
-    
-    # 9. Setup export system
-    print("📤 Setting up export system...")
-    
-    # Create export directories
-    os.makedirs("./demo_metrics", exist_ok=True)
-    os.makedirs("./demo_logs", exist_ok=True)
-    
-    export_manager = ExportManager(monitor_config, export_config, alert_config)
-    
-    # 10. Connect monitoring to self-healing
-    async def handle_analysis_result(result):
-        """Handle analysis results and trigger healing if needed."""
-        if result.get('requires_intervention', False):
-            print(f"🚨 Issue detected: {result.get('message', 'Unknown issue')}")
-            success = await self_healing_agent.heal(result)
-            if success:
-                print("✅ Self-healing intervention successful")
-            else:
-                print("❌ Self-healing intervention failed")
+    for i in range(5):
+        print(f"\n--- Iteration {i+1} ---")
         
-        # Check guardrails
-        if 'states' in result:
-            for state in result.get('states', []):
-                violations = guardrail_manager.check_guardrails(state)
-                for violation in violations:
-                    print(f"⚠️  Guardrail violation: {violation['message']}")
-                    await export_manager.queue_alert(violation)
+        # Update distributed metrics
+        dist_collector.update_worker_metrics("worker-0", {
+            "throughput": random.uniform(100, 200),
+            "queue_size": random.randint(0, 20),
+            "active_requests": random.randint(1, 10),
+            "gpu_utilization": random.uniform(60, 95)
+        })
         
-        # Queue alert if significant
-        if result.get('alert_level', 0) >= AlertLevel.WARNING.value:
-            await export_manager.queue_alert(result)
-    
-    # Override the analysis result handler
-    original_handle_result = monitor._handle_analysis_result
-    
-    async def enhanced_handle_result(result):
-        await original_handle_result(result)
-        await handle_analysis_result(result)
-    
-    monitor._handle_analysis_result = enhanced_handle_result
-    
-    # 11. Start all systems
-    print("🚀 Starting monitoring systems...")
-    
-    await monitor.start()
-    await self_healing_agent.start()
-    await export_manager.start()
-    
-    print("✅ All systems started successfully!")
-    print("\n" + "=" * 50)
-    print("📈 Monitoring Dashboard")
-    print("=" * 50)
-    
-    # 12. Simulation loop
-    try:
-        demo_duration = 120  # Run for 2 minutes
-        start_time = time.time()
-        iteration = 0
+        dist_collector.update_worker_metrics("worker-1", {
+            "throughput": random.uniform(80, 180),
+            "queue_size": random.randint(0, 15),
+            "active_requests": random.randint(1, 8),
+            "gpu_utilization": random.uniform(50, 90)
+        })
         
-        while time.time() - start_time < demo_duration:
-            iteration += 1
-            current_time = time.time() - start_time
-            
-            # Simulate component activity
-            for component in components.values():
-                component.simulate_load()
-            
-            # Simulate request tracking
-            request_collector.record_request_start(f"req_{iteration}", {
-                "prompt_length": 100,
-                "max_tokens": 50
-            })
-            
-            # Complete some requests
-            if iteration > 5:
-                request_collector.record_request_completion(
-                    f"req_{iteration-5}", 
-                    tokens_generated=45, 
-                    success=True
-                )
-            
-            # Simulate occasional issues
-            if iteration % 20 == 0:
-                # Simulate memory pressure
-                print(f"🔴 Simulating memory pressure at {current_time:.1f}s")
-                components["cache_engine"].is_healthy = False
-                components["cache_engine"].error_count += 5
-            
-            if iteration % 30 == 0:
-                # Simulate recovery
-                print(f"🟢 Simulating recovery at {current_time:.1f}s")
-                for component in components.values():
-                    component.is_healthy = True
-            
-            # Print status every 10 seconds
-            if iteration % 10 == 0:
-                health_status = monitor.get_system_health()
-                print(f"\n⏱️  Time: {current_time:.1f}s")
-                print(f"💚 System Health: {health_status['overall_health']:.1f}%")
-                print(f"📊 Components: {health_status['healthy_components']}/{health_status['monitored_components']}")
-                print(f"🔄 Collections: {health_status['collections_success_rate']:.1f}% success")
-                print(f"⚡ Avg Collection Time: {health_status['average_collection_time_us']:.1f}μs")
-                print(f"🚨 Alerts: {health_status['alerts_count']}")
-                print(f"🏥 Interventions: {health_status['interventions_count']}")
-                
-                # Export status
-                export_status = export_manager.get_export_status()
-                print(f"📤 Export Queue: M:{export_status['queue_sizes']['metrics']} L:{export_status['queue_sizes']['logs']} A:{export_status['queue_sizes']['alerts']}")
-            
-            await asyncio.sleep(1)  # Check every second
+        # Update parallelism metrics
+        dist_collector.update_parallelism_metrics(
+            ParallelismType.TENSOR_PARALLEL,
+            {
+                "world_size": 2,
+                "sync_time_ms": random.uniform(1, 5),
+                "compute_time_ms": random.uniform(40, 60),
+                "worker_times": {
+                    "worker-0": random.uniform(40, 60),
+                    "worker-1": random.uniform(42, 58)
+                }
+            }
+        )
         
-        print(f"\n🎯 Demo completed after {demo_duration} seconds")
+        # Execute custom latency collector
+        success, latency_data = monitor.plugin_manager.execute_plugin("custom_latency_collector")
+        if success:
+            print(f"Latency: {latency_data['latency_ms']:.2f}ms - Status: {latency_data['status']}")
+            
+            # Update monitor metrics
+            monitor.collect_state({})  # This will trigger guardrails
         
-    except KeyboardInterrupt:
-        print("\n🛑 Demo interrupted by user")
+        # Get monitoring state
+        health = monitor.get_system_health()
+        print(f"System Health Score: {health['overall_score']:.2f}")
+        
+        time.sleep(1)
     
-    # 13. Show final statistics
-    print("\n" + "=" * 50)
-    print("📊 Final Statistics")
-    print("=" * 50)
+    # 7. Demonstrate plugin hot-reload capability
+    print("\n7. Demonstrating plugin hot-reload...")
     
-    # System health
-    final_health = monitor.get_system_health()
-    print(f"Final System Health: {final_health['overall_health']:.1f}%")
-    print(f"Total Collections: {final_health['collections_success_rate']:.1f}% success rate")
-    print(f"Total Alerts: {final_health['alerts_count']}")
-    print(f"Total Interventions: {final_health['interventions_count']}")
+    # Create a plugin file
+    plugin_dir = Path("./test_plugins")
+    plugin_dir.mkdir(exist_ok=True)
     
-    # Self-healing statistics
-    healing_status = self_healing_agent.get_healing_status()
-    print(f"Healing Success Rate: {healing_status['healing_success_rate']:.1f}%")
-    print(f"Total Healing Sessions: {healing_status['total_healing_sessions']}")
+    plugin_file = plugin_dir / "dynamic_plugin.py"
+    plugin_code = '''
+from vllm_monitor.plugin_system import PluginInterface, PluginMetadata, PluginType
+
+class DynamicAnalyzer(PluginInterface):
+    def get_metadata(self):
+        return PluginMetadata(
+            name="dynamic_analyzer",
+            version="1.0.0",
+            type=PluginType.ANALYZER,
+            description="Dynamically loaded analyzer"
+        )
     
-    # Export statistics
-    export_status = export_manager.get_export_status()
-    print(f"Metrics Export Success: {export_status['metrics_exporter']['success_rate_percent']:.1f}%")
-    print(f"Alert Success Rate: {export_status['alert_manager']['success_rate_percent']:.1f}%")
+    def initialize(self, context):
+        self.context = context
+        return True
     
-    # Guardrail statistics
-    guardrail_status = guardrail_manager.get_guardrail_status()
-    print(f"Guardrail Violations: {guardrail_status['total_violations']}")
+    def execute(self, data):
+        return {
+            "analysis": "Dynamic analysis complete",
+            "data_points": len(data) if isinstance(data, (list, dict)) else 1
+        }
     
-    # 14. Cleanup
-    print("\n🧹 Cleaning up...")
-    await monitor.stop()
-    await self_healing_agent.stop()
-    await export_manager.stop()
+    def cleanup(self):
+        pass
+'''
     
-    print("✅ vLLM Monitoring System Demo completed successfully!")
-    print("\n📁 Check the following directories for exported data:")
-    print("   - ./demo_metrics/ - Exported metrics in JSON format")
-    print("   - ./demo_logs/ - Structured logs")
-    print("\n🔍 Review the console output above for real-time monitoring insights.")
+    plugin_file.write_text(plugin_code)
+    monitor.plugin_manager.loader.add_plugin_directory(plugin_dir)
+    
+    # Load the plugin
+    if monitor.plugin_manager.loader.load_plugin_from_file(plugin_file):
+        print("Dynamic plugin loaded successfully!")
+        
+        # Execute the dynamic plugin
+        success, result = monitor.plugin_manager.execute_plugin("dynamic_analyzer", {"test": "data"})
+        if success:
+            print(f"Dynamic analyzer result: {result}")
+    
+    # 8. Get comprehensive reports
+    print("\n8. Generating comprehensive reports...")
+    
+    # Lifecycle report
+    lifecycle_report = monitor.get_lifecycle_report()
+    print("\n--- Lifecycle Report ---")
+    print(f"Current State: {lifecycle_report['current_state']}")
+    print(f"Uptime: {lifecycle_report['uptime']:.2f} seconds")
+    print(f"Total Checkpoints: {lifecycle_report['total_checkpoints']}")
+    print(f"Active Guardrails: {lifecycle_report['active_guardrails']}")
+    
+    # Distributed metrics report
+    dist_summary = dist_collector.get_distributed_summary()
+    print("\n--- Distributed Metrics Report ---")
+    print(f"Active Workers: {dist_summary['workers']['active']}/{dist_summary['workers']['total']}")
+    print(f"Average GPU Utilization: {dist_summary['resources']['avg_gpu_utilization']:.1f}%")
+    print(f"Total GPU Memory Used: {dist_summary['resources']['total_gpu_memory_used_gb']:.2f} GB")
+    
+    # Plugin report
+    plugins = monitor.list_plugins()
+    print("\n--- Registered Plugins ---")
+    for plugin in plugins:
+        print(f"- {plugin['name']} ({plugin['type']}): {plugin['status']}")
+    
+    # 9. Test error handling and recovery
+    print("\n9. Testing error handling...")
+    
+    # Create a failing plugin
+    monitor.plugin_manager.create_plugin(
+        name="failing_plugin",
+        plugin_type="component",
+        execute_code="raise Exception('Simulated error')",
+        description="Plugin that fails"
+    )
+    
+    success, error = monitor.plugin_manager.execute_plugin("failing_plugin")
+    print(f"Failed plugin result: Success={success}, Error={error}")
+    
+    # 10. Shutdown monitoring
+    print("\n10. Shutting down monitoring system...")
+    
+    # Stop distributed collection
+    dist_collector.stop_collection()
+    
+    # Track shutdown
+    shutdown_checkpoint = monitor.lifecycle_tracker.track_shutdown(
+        reason="example_complete",
+        cleanup_status={
+            "collectors_stopped": True,
+            "plugins_unloaded": True,
+            "resources_freed": True
+        }
+    )
+    
+    print(f"\nShutdown complete. Total runtime: {shutdown_checkpoint.metadata['uptime_seconds']:.2f} seconds")
+    
+    # Final statistics
+    print("\n=== Final Statistics ===")
+    final_report = monitor.get_monitoring_report()
+    print(f"Total events collected: {sum(len(v) for v in final_report['history'].values())}")
+    print(f"Plugin executions: {len(plugins)} plugins registered")
+    print(f"Lifecycle transitions: {lifecycle_report['total_checkpoints']}")
+    
+    # Cleanup
+    if plugin_dir.exists():
+        import shutil
+        shutil.rmtree(plugin_dir)
 
 
 if __name__ == "__main__":
-    # Run the demo
-    asyncio.run(main())
+    main()

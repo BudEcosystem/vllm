@@ -25,6 +25,11 @@ import logging
 logger = logging.getLogger("vllm_monitor.core")
 
 
+def get_logger(name: str = "vllm_monitor") -> logging.Logger:
+    """Get a logger instance for the monitoring system."""
+    return logging.getLogger(name)
+
+
 class ComponentType(Enum):
     """Types of vLLM components that can be monitored."""
     ENGINE = "engine"
@@ -718,3 +723,175 @@ class VLLMMonitor:
         if self._running:
             # Can't use async in __exit__, so we'll just stop synchronously
             self._running = False
+    
+    # Integration with new components
+    
+    def setup_lifecycle_tracking(self, intervention_engine: Optional[Any] = None) -> 'LifecycleTracker':
+        """
+        Setup and integrate lifecycle tracking.
+        
+        Args:
+            intervention_engine: Optional intervention engine to use
+            
+        Returns:
+            Configured LifecycleTracker instance
+        """
+        from .lifecycle_tracker import LifecycleTracker
+        
+        if not hasattr(self, '_lifecycle_tracker'):
+            self._lifecycle_tracker = LifecycleTracker(intervention_engine)
+            
+            # Add feedback handler that logs to our logger
+            def feedback_handler(level: str, message: str, context: Dict[str, Any]):
+                log_func = getattr(logger, level, logger.info)
+                log_func(f"Lifecycle: {message} - {context}")
+            
+            self._lifecycle_tracker.add_feedback_handler(feedback_handler)
+            
+            # Register lifecycle tracker as a component
+            self.register_component(
+                self._lifecycle_tracker,
+                "lifecycle_tracker",
+                ComponentType.ENGINE
+            )
+        
+        return self._lifecycle_tracker
+    
+    def setup_plugin_system(self) -> 'PluginManager':
+        """
+        Setup and integrate the plugin system.
+        
+        Returns:
+            Configured PluginManager instance
+        """
+        from .plugin_system import PluginManager, PluginType
+        
+        if not hasattr(self, '_plugin_manager'):
+            self._plugin_manager = PluginManager()
+            
+            # Add feedback handler
+            def feedback_handler(level: str, message: str, context: Dict[str, Any]):
+                log_func = getattr(logger, level, logger.info)
+                log_func(f"Plugin: {message} - {context}")
+            
+            self._plugin_manager.add_feedback_handler(feedback_handler)
+            
+            # Auto-register plugins as collectors/analyzers/interventions
+            def on_plugin_registered(plugin_name: str):
+                plugin = self._plugin_manager.registry.get_plugin(plugin_name)
+                if not plugin:
+                    return
+                    
+                metadata = plugin.get_metadata()
+                
+                # Register based on plugin type
+                if metadata.type == PluginType.COLLECTOR:
+                    self.add_collector(plugin)
+                elif metadata.type == PluginType.ANALYZER:
+                    self.add_analyzer(plugin)
+                elif metadata.type == PluginType.INTERVENTION:
+                    self.add_intervention(plugin)
+                elif metadata.type == PluginType.GUARDRAIL and hasattr(self, '_lifecycle_tracker'):
+                    # Create guardrail policy
+                    from .lifecycle_tracker import GuardrailPolicy
+                    policy = GuardrailPolicy(
+                        name=metadata.name,
+                        description=metadata.description,
+                        condition=lambda cp: plugin.execute(cp)[0],
+                        intervention=metadata.configuration.get('intervention'),
+                        severity=metadata.configuration.get('severity', 'warning')
+                    )
+                    self._lifecycle_tracker.register_guardrail(policy)
+            
+            # Hook into plugin registration
+            self._plugin_manager._on_plugin_registered = on_plugin_registered
+        
+        return self._plugin_manager
+    
+    def register_plugin(self, 
+                       name: str,
+                       plugin_type: str,
+                       execute_code: str,
+                       description: str = "",
+                       **kwargs) -> bool:
+        """
+        Register a new plugin easily.
+        
+        Args:
+            name: Plugin name
+            plugin_type: Type of plugin (collector, analyzer, etc.)
+            execute_code: Python code for the execute function
+            description: Plugin description
+            **kwargs: Additional metadata
+            
+        Returns:
+            True if plugin registered successfully
+        """
+        if not hasattr(self, '_plugin_manager'):
+            self.setup_plugin_system()
+        
+        return self._plugin_manager.create_plugin(
+            name, plugin_type, execute_code, description, **kwargs
+        )
+    
+    def track_lifecycle_state(self,
+                             new_state: 'LifecycleState',
+                             transition_type: 'StateTransition',
+                             context: Optional[Dict[str, Any]] = None) -> 'StateCheckpoint':
+        """
+        Track a lifecycle state transition.
+        
+        Args:
+            new_state: Target state
+            transition_type: Type of transition
+            context: Additional context
+            
+        Returns:
+            StateCheckpoint for the transition
+        """
+        if not hasattr(self, '_lifecycle_tracker'):
+            self.setup_lifecycle_tracking()
+        
+        return self._lifecycle_tracker.transition_to_state(
+            new_state, transition_type, context
+        )
+    
+    def register_guardrail(self,
+                          name: str,
+                          description: str,
+                          condition_code: str,
+                          intervention: Optional[str] = None,
+                          severity: str = "warning") -> bool:
+        """
+        Register a new guardrail.
+        
+        Args:
+            name: Guardrail name
+            description: What the guardrail checks
+            condition_code: Python code that returns True if guardrail triggered
+            intervention: Name of intervention to execute
+            severity: warning, error, or critical
+            
+        Returns:
+            True if guardrail registered successfully
+        """
+        if not hasattr(self, '_plugin_manager'):
+            self.setup_plugin_system()
+        
+        return self._plugin_manager.create_guardrail(
+            name, description, condition_code, intervention, severity
+        )
+    
+    def get_lifecycle_report(self) -> Dict[str, Any]:
+        """Get comprehensive lifecycle tracking report."""
+        if not hasattr(self, '_lifecycle_tracker'):
+            return {"error": "Lifecycle tracking not initialized"}
+        
+        return self._lifecycle_tracker.get_state_report()
+    
+    def list_plugins(self, plugin_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List all registered plugins."""
+        if not hasattr(self, '_plugin_manager'):
+            return []
+        
+        return self._plugin_manager.list_plugins(plugin_type)
