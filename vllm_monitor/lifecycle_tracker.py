@@ -157,7 +157,8 @@ class LifecycleTracker:
     - Hardware/environment awareness
     """
     
-    def __init__(self, intervention_engine: Optional[InterventionEngine] = None):
+    def __init__(self, intervention_engine: Optional[InterventionEngine] = None,
+                 persistence_manager: Optional['PersistenceManager'] = None):
         self.logger = get_logger()
         self._lock = RLock()
         
@@ -188,6 +189,9 @@ class LifecycleTracker:
         self.error_intervention_map: Dict[str, List[str]] = defaultdict(list)
         self.intervention_engine = intervention_engine
         
+        # Persistence manager for storing checkpoints
+        self.persistence_manager = persistence_manager
+        
         # Component tracking
         self.registered_components: Dict[str, weakref.ref] = {}
         self.component_states: Dict[str, Dict[str, Any]] = defaultdict(dict)
@@ -215,7 +219,36 @@ class LifecycleTracker:
         self._start_time = time.time()
         self._last_checkpoint_time = self._start_time
         
+        # Load historical checkpoints if persistence is enabled
+        if self.persistence_manager:
+            self._load_recent_checkpoints()
+        
         self.logger.info("LifecycleTracker initialized with enhanced capabilities")
+    
+    def _load_recent_checkpoints(self):
+        """Load recent checkpoints from persistence"""
+        try:
+            # Load checkpoints from last 24 hours
+            recent_checkpoints = self.persistence_manager.get_checkpoints(
+                start_time=time.time() - 86400,  # 24 hours
+                limit=1000
+            )
+            
+            for checkpoint in recent_checkpoints:
+                self.checkpoints[checkpoint.timestamp] = checkpoint
+                self.state_history.append(checkpoint.to_dict())
+            
+            if recent_checkpoints:
+                # Update current state to last known state
+                last_checkpoint = recent_checkpoints[-1]
+                self.current_state = last_checkpoint.state
+                self.startup_arguments = last_checkpoint.arguments
+                self.environment_snapshot = last_checkpoint.environment
+                
+                self.logger.info(f"Loaded {len(recent_checkpoints)} historical checkpoints")
+                self.logger.info(f"Resumed from state: {self.current_state.name}")
+        except Exception as e:
+            self.logger.error(f"Error loading historical checkpoints: {e}")
 
     def _setup_signal_handlers(self):
         """Setup signal handlers for graceful shutdown"""
@@ -568,6 +601,10 @@ class LifecycleTracker:
         # Store checkpoint
         self.checkpoints[checkpoint.timestamp] = checkpoint
         self.state_history.append(checkpoint.to_dict())
+        
+        # Persist checkpoint if enabled
+        if self.persistence_manager:
+            self.persistence_manager.save_checkpoint(checkpoint)
         
         # Update state duration tracking
         if self.current_state != state:

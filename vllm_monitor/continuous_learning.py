@@ -234,13 +234,17 @@ class ContinuousLearningSystem:
     
     def __init__(self,
                  learning_method: LearningMethod = LearningMethod.ENSEMBLE,
-                 learning_rate: float = 0.1):
+                 learning_rate: float = 0.1,
+                 persistence_manager: Optional['PersistenceManager'] = None):
         self.logger = get_logger()
         self._lock = threading.RLock()
         
         # Configuration
         self.learning_method = learning_method
         self.learning_rate = learning_rate
+        
+        # Persistence manager
+        self.persistence_manager = persistence_manager
         
         # Strategy performance tracking
         self.strategy_performance: Dict[str, StrategyPerformance] = {}
@@ -272,7 +276,12 @@ class ContinuousLearningSystem:
         
         # Persistence
         self.model_path = Path("./continuous_learning_model.pkl")
-        self._load_model()
+        
+        # Load from persistence if available
+        if self.persistence_manager:
+            self._load_from_persistence()
+        else:
+            self._load_model()
         
         # Background learning
         self._learning_thread = None
@@ -280,12 +289,134 @@ class ContinuousLearningSystem:
         
         self.logger.info(f"Continuous learning system initialized with {learning_method.name} method")
     
+    def _load_from_persistence(self):
+        """Load learning data from persistence"""
+        try:
+            # Load mitigation history
+            history = self.persistence_manager.get_mitigation_history(limit=5000)
+            for attempt in history:
+                self.attempt_history.append(attempt)
+                
+                # Rebuild performance tracking
+                if attempt.strategy_name not in self.strategy_performance:
+                    self.strategy_performance[attempt.strategy_name] = StrategyPerformance(
+                        strategy_name=attempt.strategy_name
+                    )
+                self.strategy_performance[attempt.strategy_name].update(attempt)
+            
+            # Load strategies
+            strategies = self.persistence_manager.load_strategies()
+            for name, strategy_data in strategies.items():
+                # Reconstruct strategy if we have the code
+                if 'source_code' in strategy_data:
+                    # This would need to be implemented based on strategy format
+                    pass
+                
+                # At least track performance data
+                if name not in self.strategy_performance and 'success_rate' in strategy_data:
+                    perf = StrategyPerformance(strategy_name=name)
+                    perf.success_rate = strategy_data['success_rate']
+                    perf.avg_execution_time = strategy_data.get('avg_execution_time', 0.0)
+                    perf.total_attempts = strategy_data.get('usage_count', 0)
+                    self.strategy_performance[name] = perf
+            
+            # Load models if available
+            try:
+                q_table, metadata = self.persistence_manager.load_model("q_learning_table")
+                self.q_table = q_table
+                self.logger.info(f"Loaded Q-learning table with {len(self.q_table)} entries")
+            except:
+                pass
+            
+            try:
+                neural_model, metadata = self.persistence_manager.load_model("neural_strategy_model")
+                self.neural_model = neural_model
+                self.logger.info("Loaded neural strategy model")
+            except:
+                pass
+            
+            self.logger.info(f"Loaded {len(history)} historical mitigation attempts")
+            
+        except Exception as e:
+            self.logger.error(f"Error loading from persistence: {e}")
+            # Fall back to file-based loading
+            self._load_model()
+    
+    def persist_models(self):
+        """Persist learned models and data"""
+        if not self.persistence_manager:
+            self._save_model()
+            return
+        
+        try:
+            # Save Q-learning table
+            if self.q_table:
+                self.persistence_manager.save_model(
+                    "q_learning_table",
+                    self.q_table,
+                    metadata={
+                        "entries": len(self.q_table),
+                        "learning_rate": self.learning_rate,
+                        "method": self.learning_method.name
+                    }
+                )
+            
+            # Save neural model
+            if self.neural_model:
+                self.persistence_manager.save_model(
+                    "neural_strategy_model",
+                    self.neural_model,
+                    metadata={
+                        "architecture": "strategy_selector",
+                        "training_samples": self.learning_state.total_attempts
+                    }
+                )
+            
+            # Save strategy metadata
+            strategies_data = {}
+            for name, strategy in self.strategy_registry.items():
+                perf = self.strategy_performance.get(name)
+                strategies_data[name] = {
+                    'description': strategy.description,
+                    'success_rate': perf.success_rate if perf else 0.0,
+                    'avg_execution_time': perf.avg_execution_time if perf else 0.0,
+                    'usage_count': perf.total_attempts if perf else 0,
+                    'last_used': time.time(),
+                    'compatible_states': [s.name for s in strategy.applicable_states],
+                    'required_resources': strategy.required_resources,
+                    'metadata': {
+                        'side_effects': strategy.side_effects,
+                        'expected_duration': strategy.expected_duration
+                    }
+                }
+            
+            self.persistence_manager.save_strategies(strategies_data)
+            
+            # Save learning data
+            for state_action, value in self.q_table.items():
+                state, action = state_action
+                self.persistence_manager.save_learning_data(
+                    learning_type="q_learning",
+                    state_context={"state": state, "q_value": value},
+                    action_taken=action,
+                    reward=value
+                )
+            
+            self.logger.info("Persisted learning models and data")
+            
+        except Exception as e:
+            self.logger.error(f"Error persisting models: {e}")
+    
     def record_attempt(self, attempt: MitigationAttempt) -> None:
         """Record a mitigation attempt and learn from it"""
         with self._lock:
             # Store in history
             self.attempt_history.append(attempt)
             self.learning_state.total_attempts += 1
+            
+            # Persist attempt if enabled
+            if self.persistence_manager:
+                self.persistence_manager.save_mitigation_attempt(attempt)
             
             # Update performance tracking
             if attempt.strategy_name not in self.strategy_performance:

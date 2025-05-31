@@ -285,6 +285,32 @@ monitor = VLLMMonitor()
 monitor.plugin_manager.register_plugin(GPUTemperatureMonitor())
 ```
 
+### Persistence Example
+
+```python
+# See examples/persistence_example.py
+from vllm_monitor import VLLMMonitor
+from vllm_monitor.persistence import PersistenceConfig
+
+# Enable persistence
+monitor = VLLMMonitor(
+    enable_persistence=True,
+    persistence_config=PersistenceConfig(
+        storage_dir=Path("./monitor_data"),
+        metrics_retention_days=30
+    )
+)
+
+# All monitoring data is automatically persisted
+# Plugins, guardrails, and strategies survive restarts
+```
+
+For more examples, see the `examples/` directory:
+- `integrated_monitoring_example.py` - Basic integration
+- `predictive_monitoring_example.py` - Advanced predictive monitoring
+- `complete_monitoring_example.py` - Full feature demonstration
+- `persistence_example.py` - Persistence and data management
+
 ## Deployment
 
 ### Production Setup

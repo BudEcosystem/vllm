@@ -384,13 +384,17 @@ class PredictiveFailureDetector:
     
     def __init__(self, 
                  learning_rate: float = 0.1,
-                 prediction_horizon: float = 300.0):  # 5 minutes
+                 prediction_horizon: float = 300.0,  # 5 minutes
+                 persistence_manager: Optional['PersistenceManager'] = None):
         self.logger = get_logger()
         self._lock = threading.RLock()
         
         # Configuration
         self.learning_rate = learning_rate
         self.prediction_horizon = prediction_horizon
+        
+        # Persistence manager
+        self.persistence_manager = persistence_manager
         
         # State tracking
         self.state_graph = StateGraph()
@@ -424,9 +428,74 @@ class PredictiveFailureDetector:
         self._analyzing = False
         
         # Load learned patterns
-        self._load_model()
+        if self.persistence_manager:
+            self._load_from_persistence()
+        else:
+            self._load_model()
         
         self.logger.info("Predictive failure detector initialized")
+    
+    def _load_from_persistence(self):
+        """Load failure detection data from persistence"""
+        try:
+            # Load failure patterns from model
+            try:
+                patterns_model, metadata = self.persistence_manager.load_model("failure_patterns")
+                self.failure_patterns = patterns_model.get('patterns', {})
+                self.logger.info(f"Loaded {len(self.failure_patterns)} failure patterns")
+            except:
+                pass
+            
+            # Load state graph from model
+            try:
+                graph_model, metadata = self.persistence_manager.load_model("state_graph")
+                if graph_model:
+                    # Reconstruct state graph
+                    self._restore_state_graph(graph_model)
+                    self.logger.info("Loaded state graph from persistence")
+            except:
+                pass
+            
+            # Load historical predictions
+            predictions = self._get_historical_predictions()
+            
+            for pred_data in predictions:
+                # Reconstruct prediction object
+                prediction = self._reconstruct_prediction(pred_data)
+                if prediction:
+                    self.prediction_history.append(prediction.to_dict())
+            
+            self.logger.info(f"Loaded {len(predictions)} historical predictions")
+            
+            # Load metrics from model
+            try:
+                metrics_model, metadata = self.persistence_manager.load_model("failure_detector_metrics")
+                if metrics_model:
+                    self.prediction_accuracy = metrics_model.get('prediction_accuracy', 0.0)
+                    self.false_positive_rate = metrics_model.get('false_positive_rate', 0.0)
+                    self.true_positive_rate = metrics_model.get('true_positive_rate', 0.0)
+                    self.logger.info("Loaded failure detector metrics")
+            except:
+                pass
+            
+            # Load recent checkpoints to rebuild state
+            checkpoints = self.persistence_manager.get_checkpoints(
+                start_time=time.time() - 3600,  # Last hour
+                limit=100
+            )
+            
+            for checkpoint in checkpoints:
+                self.state_history.append(checkpoint.state)
+                self.checkpoint_history.append(checkpoint)
+                # Update state graph
+                self.state_graph.update_node(checkpoint.state, checkpoint)
+            
+            self.logger.info(f"Loaded {len(checkpoints)} recent checkpoints")
+            
+        except Exception as e:
+            self.logger.error(f"Error loading from persistence: {e}")
+            # Fall back to file-based loading
+            self._load_model()
     
     def analyze_checkpoint(self, checkpoint: StateCheckpoint) -> List[FailurePrediction]:
         """Analyze a checkpoint for failure predictions"""
@@ -464,6 +533,10 @@ class PredictiveFailureDetector:
             # Store predictions
             for pred in predictions:
                 self.prediction_history.append(pred.to_dict())
+                
+                # Persist prediction if enabled
+                if self.persistence_manager:
+                    self.persistence_manager.save_prediction(pred)
             
             # Learn from feedback
             if self.learning_enabled:
@@ -882,23 +955,66 @@ class PredictiveFailureDetector:
     def _save_model(self):
         """Save learned patterns and model"""
         try:
-            model_data = {
-                "failure_patterns": self.failure_patterns,
-                "state_graph": {
+            # Save to persistence manager if available
+            if self.persistence_manager:
+                # Save failure patterns
+                self.persistence_manager.save_model(
+                    "failure_patterns",
+                    {"patterns": self.failure_patterns},
+                    metadata={
+                        "pattern_count": len(self.failure_patterns),
+                        "last_updated": time.time()
+                    }
+                )
+                
+                # Save state graph
+                graph_data = {
                     "nodes": {state.name: node.to_dict() 
                              for state, node in self.state_graph.nodes.items()},
                     "edges": {f"{s1.name}->{s2.name}": prob 
                              for (s1, s2), prob in self.state_graph.edges.items()}
-                },
-                "metrics": {
-                    "prediction_accuracy": self.prediction_accuracy,
-                    "false_positive_rate": self.false_positive_rate,
-                    "true_positive_rate": self.true_positive_rate
                 }
-            }
-            
-            with open(self.model_path, 'wb') as f:
-                pickle.dump(model_data, f)
+                self.persistence_manager.save_model(
+                    "state_graph",
+                    graph_data,
+                    metadata={
+                        "node_count": len(self.state_graph.nodes),
+                        "edge_count": len(self.state_graph.edges)
+                    }
+                )
+                
+                # Save metrics
+                self.persistence_manager.save_model(
+                    "failure_detector_metrics",
+                    {
+                        "prediction_accuracy": self.prediction_accuracy,
+                        "false_positive_rate": self.false_positive_rate,
+                        "true_positive_rate": self.true_positive_rate
+                    },
+                    metadata={
+                        "last_updated": time.time(),
+                        "total_predictions": len(self.prediction_history._buffer)
+                    }
+                )
+            else:
+                # Fall back to file-based storage
+                model_data = {
+                    "failure_patterns": self.failure_patterns,
+                    "state_graph": {
+                        "nodes": {state.name: node.to_dict() 
+                                 for state, node in self.state_graph.nodes.items()},
+                        "edges": {f"{s1.name}->{s2.name}": prob 
+                                 for (s1, s2), prob in self.state_graph.edges.items()}
+                    },
+                    "metrics": {
+                        "prediction_accuracy": self.prediction_accuracy,
+                        "false_positive_rate": self.false_positive_rate,
+                        "true_positive_rate": self.true_positive_rate
+                    }
+                }
+                
+                with open(self.model_path, 'wb') as f:
+                    pickle.dump(model_data, f)
                 
         except Exception as e:
             self.logger.error(f"Failed to save model: {e}")
@@ -946,6 +1062,77 @@ class PredictiveFailureDetector:
                     pred.to_dict() for pred in list(self.active_predictions.values())[:5]
                 ]
             }
+    
+    def _restore_state_graph(self, graph_data: Dict[str, Any]):
+        """Restore state graph from persisted data"""
+        # Clear existing graph
+        self.state_graph = StateGraph()
+        
+        # Restore nodes
+        nodes = graph_data.get("nodes", {})
+        for state_name, node_data in nodes.items():
+            state = LifecycleState[state_name]
+            node = StateNode(
+                state=state,
+                health_status=HealthStatus[node_data["health_status"]],
+                metrics=node_data["metrics"],
+                error_patterns=node_data.get("error_patterns", []),
+                visit_count=node_data.get("visit_count", 0),
+                failure_count=node_data.get("failure_count", 0),
+                recovery_count=node_data.get("recovery_count", 0),
+                failure_probability=node_data.get("failure_probability", 0.0),
+                health_score=node_data.get("health_score", 1.0)
+            )
+            self.state_graph.nodes[state] = node
+        
+        # Restore edges
+        edges = graph_data.get("edges", {})
+        for edge_key, probability in edges.items():
+            states = edge_key.split("->")
+            if len(states) == 2:
+                from_state = LifecycleState[states[0]]
+                to_state = LifecycleState[states[1]]
+                self.state_graph.add_transition(from_state, to_state, probability)
+    
+    def _get_historical_predictions(self) -> List[Dict[str, Any]]:
+        """Get historical predictions from persistence"""
+        # This would be implemented based on the persistence layer's API
+        # For now, return empty list
+        return []
+    
+    def _reconstruct_prediction(self, pred_data: Dict[str, Any]) -> Optional[FailurePrediction]:
+        """Reconstruct a FailurePrediction from persisted data"""
+        try:
+            prediction = FailurePrediction(
+                prediction_id=pred_data.get('prediction_id', ''),
+                timestamp=pred_data.get('timestamp', 0),
+                current_state=LifecycleState[pred_data.get('current_state', 'NOT_STARTED')],
+                predicted_failure_state=LifecycleState[pred_data['predicted_failure_state']] 
+                    if pred_data.get('predicted_failure_state') else None,
+                failure_type=pred_data.get('failure_type', ''),
+                time_to_failure=pred_data.get('time_to_failure', 0),
+                probability=pred_data.get('probability', 0),
+                confidence=PredictionConfidence[pred_data.get('confidence', 'LOW')],
+                contributing_factors=pred_data.get('contributing_factors', []),
+                recommended_mitigations=[]  # Would need to reconstruct these as well
+            )
+            return prediction
+        except Exception as e:
+            self.logger.error(f"Failed to reconstruct prediction: {e}")
+            return None
+    
+    def persist_patterns(self):
+        """Persist current failure patterns"""
+        if self.persistence_manager:
+            # Save patterns
+            self.persistence_manager.save_model(
+                "failure_patterns",
+                {"patterns": self.failure_patterns},
+                metadata={
+                    "pattern_count": len(self.failure_patterns),
+                    "last_updated": time.time()
+                }
+            )
 
 
 class PatternMatcher:

@@ -32,6 +32,7 @@ from .predictive_failure_detection import PredictiveFailureDetector
 from .continuous_learning import ContinuousLearningSystem, MitigationAttempt, MitigationOutcome
 from .vllm_integration_plugins import register_all_vllm_plugins
 from .vllm_mitigation_strategies import register_all_mitigation_strategies
+from .persistence import PersistenceConfig
 
 
 class VLLMEngineMonitor:
@@ -49,24 +50,36 @@ class VLLMEngineMonitor:
     def __init__(self, 
                  enable_predictive: bool = True,
                  enable_learning: bool = True,
-                 enable_auto_mitigation: bool = True):
+                 enable_auto_mitigation: bool = True,
+                 enable_persistence: bool = True,
+                 persistence_config: Optional['PersistenceConfig'] = None):
         self.logger = get_logger()
         
-        # Core monitoring components
-        self.monitor = VLLMMonitor(enable_history=True)
+        # Core monitoring components with persistence
+        self.monitor = VLLMMonitor(
+            enable_persistence=enable_persistence,
+            persistence_config=persistence_config
+        )
         self.monitor.setup_lifecycle_tracking()
         self.monitor.setup_plugin_system()
         
-        # Advanced components
+        # Get persistence manager from monitor
+        self.persistence_manager = self.monitor.persistence_manager
+        
+        # Advanced components with persistence
         self.predictive_detector = None
         self.continuous_learner = None
         
         if enable_predictive:
-            self.predictive_detector = PredictiveFailureDetector()
+            self.predictive_detector = PredictiveFailureDetector(
+                persistence_manager=self.persistence_manager
+            )
             self.predictive_detector.start_background_analysis()
         
         if enable_learning:
-            self.continuous_learner = ContinuousLearningSystem()
+            self.continuous_learner = ContinuousLearningSystem(
+                persistence_manager=self.persistence_manager
+            )
             self.continuous_learner.start_background_learning()
             register_all_mitigation_strategies(self.continuous_learner)
         

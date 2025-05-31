@@ -316,7 +316,9 @@ class VLLMMonitor:
     the performance impact on vLLM remains below the configured threshold.
     """
     
-    def __init__(self, config: Optional[MonitorConfig] = None):
+    def __init__(self, config: Optional[MonitorConfig] = None,
+                 enable_persistence: bool = True,
+                 persistence_config: Optional['PersistenceConfig'] = None):
         self.config = config or MonitorConfig()
         self.state = MonitorState()
         
@@ -332,6 +334,16 @@ class VLLMMonitor:
             lambda: CircularBuffer(1000)
         )
         self._alerts = CircularBuffer(1000)
+        
+        # Persistence layer
+        self.persistence_manager: Optional['PersistenceManager'] = None
+        if enable_persistence:
+            from .persistence import PersistenceManager, PersistenceConfig
+            self.persistence_manager = PersistenceManager(
+                persistence_config or PersistenceConfig()
+            )
+            # Load persisted plugins, guardrails, strategies on startup
+            self._load_persisted_data()
         
         # Async infrastructure
         self._event_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -578,6 +590,16 @@ class VLLMMonitor:
         # Cache metrics for quick access
         metric_key = f"{state.component_id}:{state.state_type.value}"
         self._metrics_cache[metric_key].append(state)
+        
+        # Persist to storage if enabled
+        if self.persistence_manager:
+            self.persistence_manager.save_metric(
+                metric_type=state.state_type.value,
+                metric_name=f"{state.component_id}_state",
+                value=1.0 if state.is_healthy else 0.0,
+                tags={'component_id': state.component_id, 'component_type': state.component_type.value},
+                metadata=state.data
+            )
     
     async def _analyze_data(self) -> None:
         """Run analysis on collected data."""
@@ -895,3 +917,143 @@ class VLLMMonitor:
             return []
         
         return self._plugin_manager.list_plugins(plugin_type)
+    
+    # Persistence methods
+    
+    def _load_persisted_data(self) -> None:
+        """Load persisted plugins, guardrails, and strategies on startup."""
+        if not self.persistence_manager:
+            return
+        
+        try:
+            # Load plugins
+            plugins = self.persistence_manager.load_plugins()
+            for name, plugin_data in plugins.items():
+                if plugin_data.get('enabled', True):
+                    self.register_plugin(
+                        name=name,
+                        plugin_type=plugin_data['type'],
+                        execute_code=plugin_data['source_code'],
+                        description=plugin_data.get('description', ''),
+                        **plugin_data.get('config', {})
+                    )
+                    logger.info(f"Loaded persisted plugin: {name}")
+            
+            # Load guardrails
+            if hasattr(self, '_lifecycle_tracker'):
+                guardrails = self.persistence_manager.load_guardrails()
+                for policy in guardrails:
+                    if policy.enabled:
+                        self._lifecycle_tracker.register_guardrail(policy)
+                        logger.info(f"Loaded persisted guardrail: {policy.name}")
+            
+            # Load strategies
+            strategies = self.persistence_manager.load_strategies()
+            # Strategies will be loaded by the continuous learning system
+            
+        except Exception as e:
+            logger.error(f"Error loading persisted data: {e}")
+    
+    def persist_plugins(self) -> None:
+        """Persist currently loaded plugins."""
+        if not self.persistence_manager or not hasattr(self, '_plugin_manager'):
+            return
+        
+        plugins_data = {}
+        for name, plugin in self._plugin_manager.registry._plugins.items():
+            metadata = plugin.get_metadata()
+            plugins_data[name] = {
+                'type': metadata.type.value,
+                'source_code': getattr(plugin, '_source_code', ''),
+                'config': metadata.configuration,
+                'description': metadata.description,
+                'enabled': True,
+                'dependencies': metadata.dependencies,
+                'created_at': metadata.created_at
+            }
+        
+        self.persistence_manager.save_plugins(plugins_data)
+    
+    def persist_guardrails(self) -> None:
+        """Persist currently loaded guardrails."""
+        if not self.persistence_manager or not hasattr(self, '_lifecycle_tracker'):
+            return
+        
+        guardrails = self._lifecycle_tracker.guardrails
+        self.persistence_manager.save_guardrails(guardrails)
+    
+    def save_happy_path(self, path_id: str, name: str) -> None:
+        """Save current execution as a happy path."""
+        if not self.persistence_manager or not hasattr(self, '_lifecycle_tracker'):
+            return
+        
+        checkpoints = self._lifecycle_tracker.state_history
+        if not checkpoints:
+            return
+        
+        # Extract metrics profile from recent states
+        metrics_profile = {}
+        recent_states = self._state_history.get_latest(1000)
+        for state in recent_states:
+            if state.state_type == StateType.PERFORMANCE:
+                for key, value in state.data.items():
+                    if key not in metrics_profile:
+                        metrics_profile[key] = []
+                    metrics_profile[key].append(value)
+        
+        # Calculate statistics for metrics
+        for key, values in metrics_profile.items():
+            if values:
+                metrics_profile[key] = {
+                    'mean': np.mean(values),
+                    'std': np.std(values),
+                    'min': np.min(values),
+                    'max': np.max(values)
+                }
+        
+        # Get active guardrails
+        active_guardrails = [g.name for g in self._lifecycle_tracker.guardrails if g.enabled]
+        
+        self.persistence_manager.save_happy_path(
+            path_id=path_id,
+            name=name,
+            checkpoints=checkpoints,
+            metrics_profile=metrics_profile,
+            guardrails=active_guardrails
+        )
+    
+    def get_historical_metrics(self, metric_type: Optional[str] = None,
+                             hours_back: float = 24.0) -> List[Dict[str, Any]]:
+        """Get historical metrics from persistence."""
+        if not self.persistence_manager:
+            return []
+        
+        start_time = time.time() - (hours_back * 3600)
+        return self.persistence_manager.get_metrics(
+            metric_type=metric_type,
+            start_time=start_time
+        )
+    
+    def export_monitoring_data(self, output_dir: str) -> None:
+        """Export all monitoring data to a directory."""
+        if not self.persistence_manager:
+            logger.warning("Persistence not enabled, cannot export data")
+            return
+        
+        from pathlib import Path
+        output_path = Path(output_dir)
+        
+        # Persist current state
+        self.persist_plugins()
+        self.persist_guardrails()
+        
+        # Export all data
+        self.persistence_manager.export_data(output_path)
+        logger.info(f"Exported monitoring data to {output_path}")
+    
+    def get_persistence_stats(self) -> Dict[str, Any]:
+        """Get statistics about persisted data."""
+        if not self.persistence_manager:
+            return {"error": "Persistence not enabled"}
+        
+        return self.persistence_manager.get_statistics()
