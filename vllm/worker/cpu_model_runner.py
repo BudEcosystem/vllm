@@ -508,6 +508,11 @@ class CPUModelRunnerBase(ModelRunnerBase[TModelInputForCPU]):
             )
             self.model = self.lora_manager.create_lora_manager(self.model)
 
+        if not self.model_config.disable_tpp_optimizer:
+            from tpp_pytorch_extension.nn import OptimizeForLinear
+            logger.info("Running TPP Optimizer")
+            OptimizeForLinear(self.model)
+
     def get_model(self) -> nn.Module:
         return self.model
 
