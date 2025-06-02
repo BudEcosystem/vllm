@@ -154,6 +154,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY tpp_env.sh .
 SHELL ["/bin/bash", "-c"]
-RUN source /workspace/vllm/tpp_env.sh
+RUN source /workspace/tpp_env.sh
 
 ENTRYPOINT ["python3", "-m", "vllm.entrypoints.openai.api_server"]
