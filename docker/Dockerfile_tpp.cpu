@@ -90,9 +90,8 @@ ENV CMAKE_DISABLE_FIND_PACKAGE_MKL=TRUE
 WORKDIR /workspace/vllm/tpp-pytorch-extension
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=cache,target=/root/.cache/ccache \
-    python3 setup.py install
-SHELL ["/bin/bash", "-c"]
-RUN source /workspace/vllm/tpp_env.sh
+    python3 setup.py bdist_wheel
+
 
 ######################### DEV IMAGE #########################
 FROM vllm-build AS vllm-dev
@@ -150,6 +149,11 @@ WORKDIR /workspace/
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=cache,target=/root/.cache/ccache \
     --mount=type=bind,from=vllm-build,src=/workspace/vllm/dist,target=dist \
-    uv pip install dist/*.whl
+    --mount=type=bind,from=vllm-build,src=/workspace/vllm/tpp-pytorch-extension/dist,target=tppdist \
+    uv pip install dist/*.whl tppdist/*.whl
+
+COPY tpp_env.sh .
+SHELL ["/bin/bash", "-c"]
+RUN source /workspace/vllm/tpp_env.sh
 
 ENTRYPOINT ["python3", "-m", "vllm.entrypoints.openai.api_server"]
