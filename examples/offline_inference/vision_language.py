@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 This example shows how to use vLLM for running offline inference with
 the correct prompt format on vision language models for text generation.
@@ -326,6 +327,25 @@ def run_smolvlm(questions: list[str], modality: str) -> ModelRequestData:
         (f"<|im_start|>User:<image>{question}<end_of_utterance>\nAssistant:")
         for question in questions
     ]
+
+    return ModelRequestData(
+        engine_args=engine_args,
+        prompts=prompts,
+    )
+
+
+# omni-research/Tarsier-7b
+def run_tarsier(questions: list[str], modality: str) -> ModelRequestData:
+    assert modality == "image"
+    model_name = "omni-research/Tarsier-7b"
+
+    engine_args = EngineArgs(
+        model=model_name,
+        trust_remote_code=True,
+        max_model_len=4096,
+        limit_mm_per_prompt={modality: 1},
+    )
+    prompts = [(f"USER: <image>\n{question} ASSISTANT:") for question in questions]
 
     return ModelRequestData(
         engine_args=engine_args,
@@ -1020,6 +1040,37 @@ def run_qwen2_5_omni(questions: list[str], modality: str):
     )
 
 
+def run_tarsier2(questions: list[str], modality: str) -> ModelRequestData:
+    model_name = "omni-research/Tarsier2-Recap-7b"
+
+    engine_args = EngineArgs(
+        model=model_name,
+        max_model_len=4096,
+        hf_overrides={"architectures": ["Tarsier2ForConditionalGeneration"]},
+        limit_mm_per_prompt={modality: 1},
+    )
+
+    if modality == "image":
+        placeholder = "<|image_pad|>"
+    elif modality == "video":
+        placeholder = "<|video_pad|>"
+
+    prompts = [
+        (
+            "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+            f"<|im_start|>user\n<|vision_start|>{placeholder}<|vision_end|>"
+            f"{question}<|im_end|>\n"
+            "<|im_start|>assistant\n"
+        )
+        for question in questions
+    ]
+
+    return ModelRequestData(
+        engine_args=engine_args,
+        prompts=prompts,
+    )
+
+
 # SkyworkR1V
 def run_skyworkr1v(questions: list[str], modality: str) -> ModelRequestData:
     assert modality == "image"
@@ -1091,6 +1142,8 @@ model_example_map = {
     "qwen2_5_omni": run_qwen2_5_omni,
     "skywork_chat": run_skyworkr1v,
     "smolvlm": run_smolvlm,
+    "tarsier": run_tarsier,
+    "tarsier2": run_tarsier2,
 }
 
 

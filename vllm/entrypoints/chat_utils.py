@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import asyncio
 import json
@@ -292,6 +293,7 @@ def _try_extract_ast(chat_template: str) -> Optional[jinja2.nodes.Template]:
         return None
 
 
+@lru_cache(maxsize=32)
 def _detect_content_format(
     chat_template: str,
     *,
@@ -447,6 +449,9 @@ def resolve_chat_template_content_format(
     model_config: ModelConfig,
     trust_remote_code: Optional[bool] = None,
 ) -> _ChatTemplateContentFormat:
+    if given_format != "auto":
+        return given_format
+
     detected_format = _resolve_chat_template_content_format(
         chat_template,
         tools,
@@ -460,7 +465,7 @@ def resolve_chat_template_content_format(
         detected_format=detected_format,
     )
 
-    return detected_format if given_format == "auto" else given_format
+    return detected_format
 
 
 

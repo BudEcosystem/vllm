@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 from __future__ import annotations
 
 import multiprocessing
@@ -61,13 +62,15 @@ class StructuredOutputManager:
             return
 
         if TYPE_CHECKING:
-            assert request.sampling_params.guided_decoding is not None
+            assert request.sampling_params is not None and \
+                request.sampling_params.guided_decoding is not None
 
         # Initialize the backend the first time it is needed.
         #
         # NOTE: We only support a single backend. We do NOT support different
         # backends on a per-request basis in V1 (for now, anyway...).
         if self.backend is None:
+            assert request.sampling_params is not None
             backend = request.sampling_params.guided_decoding.backend
             vocab_size = self.vllm_config.model_config.get_vocab_size()
             if backend == "xgrammar":
