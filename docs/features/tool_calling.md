@@ -311,6 +311,86 @@ Flags: `--tool-call-parser pythonic --chat-template {see_above}`
 !!! warning
     Llama's smaller models frequently fail to emit tool calls in the correct format. Your mileage may vary.
 
+### Generic Regex-Based Parser (`regex`)
+
+The regex tool parser provides a flexible way to extract tool calls from custom model outputs using regular expressions. This parser is ideal for:
+
+* Models with unique tool calling formats not covered by existing parsers
+* Custom fine-tuned models with specific output patterns
+* Experimenting with new tool calling formats
+
+#### Configuration
+
+The regex parser requires a JSON configuration specified via `--tool-parser-config`. The configuration supports the following fields:
+
+* `tool_call_pattern` (required): Regex pattern to extract the overall tool calls section
+* `function_pattern` (optional): Regex pattern to extract individual function calls
+* `function_name_pattern` (optional): Regex pattern to extract function names
+* `arguments_pattern` (optional): Regex pattern to extract function arguments
+* `strip_tokens` (optional): List of tokens to remove from extracted content
+* `streaming_chunk_pattern` (optional): Pattern for streaming mode
+* `streaming_accumulate` (optional): Whether to accumulate text in streaming mode (default: true)
+
+#### Examples
+
+**XML-style format:**
+
+```bash
+vllm serve your-model \
+    --enable-auto-tool-choice \
+    --tool-call-parser regex \
+    --tool-parser-config '{
+        "tool_call_pattern": "<tools>(.*?)</tools>",
+        "function_pattern": "<function>(.*?)</function>",
+        "function_name_pattern": "<name>(.*?)</name>",
+        "arguments_pattern": "<arguments>(.*?)</arguments>",
+        "strip_tokens": ["<tools>", "</tools>"]
+    }'
+```
+
+**JSON block format:**
+
+```bash
+vllm serve your-model \
+    --enable-auto-tool-choice \
+    --tool-call-parser regex \
+    --tool-parser-config '{
+        "tool_call_pattern": "```tools\\n(.*?)\\n```",
+        "strip_tokens": ["```tools", "```"]
+    }'
+```
+
+**Custom delimiter format:**
+
+```bash
+vllm serve your-model \
+    --enable-auto-tool-choice \
+    --tool-call-parser regex \
+    --tool-parser-config '{
+        "tool_call_pattern": "@@@TOOLS(.*?)@@@END",
+        "function_pattern": "FUNC:(.*?)(?=FUNC:|$)",
+        "function_name_pattern": "^(\\w+)",
+        "arguments_pattern": "\\((.*?)\\)$",
+        "strip_tokens": ["@@@TOOLS", "@@@END"]
+    }'
+```
+
+#### How It Works
+
+1. The parser first uses `tool_call_pattern` to find tool call sections in the model output
+2. If the extracted content is valid JSON, it parses it directly
+3. Otherwise, it uses the optional patterns to extract function names and arguments
+4. The parser supports both streaming and non-streaming modes
+
+#### Tips
+
+* Test your regex patterns with sample model outputs before deployment
+* Use online regex testers to validate your patterns
+* Consider using more specific patterns to avoid false matches
+* The parser will gracefully handle malformed outputs by treating them as regular content
+
+Flags: `--tool-call-parser regex --tool-parser-config '{...}'`
+
 ## How to write a tool parser plugin
 
 A tool parser plugin is a Python file containing one or more ToolParser implementations. You can write a ToolParser similar to the `Hermes2ProToolParser` in <gh-file:vllm/entrypoints/openai/tool_parsers/hermes_tool_parser.py>.

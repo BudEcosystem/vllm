@@ -257,6 +257,15 @@ def make_arg_parser(parser: FlexibleArgumentParser) -> FlexibleArgumentParser:
         "in ``--tool-call-parser``.")
 
     parser.add_argument(
+        "--tool-parser-config",
+        type=str,
+        default=None,
+        help="JSON configuration for the tool parser. Required when using "
+        "``--tool-call-parser regex``. Example: "
+        "'{\"tool_call_pattern\": \"<tools>(.*?)</tools>\", "
+        "\"function_pattern\": \"...\"}'")
+
+    parser.add_argument(
         "--log-config-file",
         type=str,
         default=envs.VLLM_LOGGING_CONFIG_PATH,
@@ -311,6 +320,20 @@ def validate_parsed_serve_args(args: argparse.Namespace):
     if args.enable_auto_tool_choice and not args.tool_call_parser:
         raise TypeError("Error: --enable-auto-tool-choice requires "
                         "--tool-call-parser")
+
+    # Regex tool parser requires configuration
+    if args.tool_call_parser == "regex" and not args.tool_parser_config:
+        raise TypeError("Error: --tool-call-parser regex requires "
+                        "--tool-parser-config")
+
+    # Parse tool parser config if provided
+    if args.tool_parser_config:
+        try:
+            json.loads(args.tool_parser_config)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Invalid JSON in --tool-parser-config: {e}") from e
+
     if args.enable_prompt_embeds and args.enable_prompt_adapter:
         raise ValueError(
             "Cannot use prompt embeds and prompt adapter at the same time.")

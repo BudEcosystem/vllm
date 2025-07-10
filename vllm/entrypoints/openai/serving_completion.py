@@ -2,8 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import asyncio
-import time
 import math
+import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from collections.abc import Sequence as GenericSequence
 from typing import Optional, Union, cast
@@ -516,7 +516,8 @@ class OpenAIServingCompletion(OpenAIServing):
                 else:
                     logprobs = None
 
-                if output.cumulative_logprob is not None and len(output.token_ids) > 0:
+                if output.cumulative_logprob is not None and len(
+                        output.token_ids) > 0:
                     perplexity = math.exp(-output.cumulative_logprob /
                                           len(output.token_ids))
                 else:

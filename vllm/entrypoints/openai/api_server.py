@@ -1518,6 +1518,7 @@ async def init_app_state(
         expand_tools_even_if_tool_choice_none=args.
         expand_tools_even_if_tool_choice_none,
         tool_parser=args.tool_call_parser,
+        tool_parser_config=args.tool_parser_config,
         reasoning_parser=args.reasoning_parser,
         enable_prompt_tokens_details=args.enable_prompt_tokens_details,
         enable_force_include_usage=args.enable_force_include_usage,

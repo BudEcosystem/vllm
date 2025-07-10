@@ -1,0 +1,101 @@
+{
+  "xml_style": {
+    "description": "XML-style tool calls with nested tags",
+    "example_output": "<tools><function><name>get_weather</name><arguments>{\"city\": \"Paris\"}</arguments></function></tools>",
+    "config": {
+      "tool_call_pattern": "<tools>(.*?)</tools>",
+      "function_pattern": "<function>(.*?)</function>",
+      "function_name_pattern": "<name>(.*?)</name>",
+      "arguments_pattern": "<arguments>(.*?)</arguments>",
+      "strip_tokens": ["<tools>", "</tools>"]
+    }
+  },
+  
+  "json_block": {
+    "description": "JSON wrapped in markdown code blocks",
+    "example_output": "```tools\n[{\"name\": \"search\", \"arguments\": {\"query\": \"AI news\"}}]\n```",
+    "config": {
+      "tool_call_pattern": "```tools\\n(.*?)\\n```",
+      "strip_tokens": ["```tools", "```"]
+    }
+  },
+  
+  "bracket_delimited": {
+    "description": "Tool calls wrapped in custom brackets",
+    "example_output": "[TOOL_CALLS][{\"name\": \"calculate\", \"arguments\": {\"expression\": \"2+2\"}}][/TOOL_CALLS]",
+    "config": {
+      "tool_call_pattern": "\\[TOOL_CALLS\\](.*?)\\[/TOOL_CALLS\\]",
+      "strip_tokens": ["[TOOL_CALLS]", "[/TOOL_CALLS]"]
+    }
+  },
+  
+  "angle_brackets": {
+    "description": "Tool calls in angle brackets",
+    "example_output": "<tools>[{\"function\": \"get_time\", \"params\": {\"timezone\": \"UTC\"}}]</tools>",
+    "config": {
+      "tool_call_pattern": "<tools>(.*?)</tools>",
+      "strip_tokens": ["<tools>", "</tools>"]
+    }
+  },
+  
+  "function_style": {
+    "description": "Function-call style format",
+    "example_output": "@@@TOOLS\nFUNC:send_email({\"to\": \"user@example.com\", \"subject\": \"Hello\"})\n@@@END",
+    "config": {
+      "tool_call_pattern": "@@@TOOLS(.*?)@@@END",
+      "function_pattern": "FUNC:(.*?)(?=FUNC:|$)",
+      "function_name_pattern": "^(\\w+)",
+      "arguments_pattern": "\\((.*?)\\)$",
+      "strip_tokens": ["@@@TOOLS", "@@@END"]
+    }
+  },
+  
+  "yaml_style": {
+    "description": "YAML-like tool call format",
+    "example_output": "---tools---\n- name: search_web\n  args: {\"query\": \"weather today\"}\n---end---",
+    "config": {
+      "tool_call_pattern": "---tools---(.*?)---end---",
+      "function_pattern": "- name: (\\w+)\\s+args: (\\{.*?\\})",
+      "strip_tokens": ["---tools---", "---end---"]
+    }
+  },
+  
+  "pipe_delimited": {
+    "description": "Pipe-delimited tool calls",
+    "example_output": "||TOOLS||get_weather|{\"city\": \"Tokyo\"}||calculate|{\"expr\": \"5*5\"}||END||",
+    "config": {
+      "tool_call_pattern": "\\|\\|TOOLS\\|\\|(.*?)\\|\\|END\\|\\|",
+      "function_pattern": "(\\w+)\\|(\\{[^|]*\\})",
+      "strip_tokens": ["||TOOLS||", "||END||"]
+    }
+  },
+  
+  "inline_json": {
+    "description": "Inline JSON with special markers",
+    "example_output": "TOOL>>>{\"name\": \"translate\", \"arguments\": {\"text\": \"Hello\", \"to\": \"Spanish\"}}<<<TOOL",
+    "config": {
+      "tool_call_pattern": "TOOL>>>(.*?)<<<TOOL",
+      "strip_tokens": ["TOOL>>>", "<<<TOOL"]
+    }
+  },
+  
+  "structured_text": {
+    "description": "Structured text format with headers",
+    "example_output": "=== TOOL CALL ===\nFunction: get_stock_price\nArguments: {\"symbol\": \"AAPL\"}\n=== END TOOL ===",
+    "config": {
+      "tool_call_pattern": "=== TOOL CALL ===(.*?)=== END TOOL ===",
+      "function_name_pattern": "Function: (\\w+)",
+      "arguments_pattern": "Arguments: (\\{.*?\\})",
+      "strip_tokens": ["=== TOOL CALL ===", "=== END TOOL ==="]
+    }
+  },
+  
+  "comment_style": {
+    "description": "Tool calls embedded in comments",
+    "example_output": "/* TOOLS: [{\"func\": \"web_search\", \"params\": {\"q\": \"latest news\"}}] */",
+    "config": {
+      "tool_call_pattern": "/\\* TOOLS: (.*?) \\*/",
+      "strip_tokens": ["/* TOOLS:", "*/"]
+    }
+  }
+}

@@ -3,8 +3,8 @@
 
 import asyncio
 import json
-import time
 import math
+import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from collections.abc import Sequence as GenericSequence
 from typing import Callable, Final, Optional, Union
@@ -66,6 +66,7 @@ class OpenAIServingChat(OpenAIServing):
         enable_auto_tools: bool = False,
         expand_tools_even_if_tool_choice_none: bool = False,
         tool_parser: Optional[str] = None,
+        tool_parser_config: Optional[str] = None,
         enable_prompt_tokens_details: bool = False,
         enable_force_include_usage: bool = False,
     ) -> None:
@@ -100,6 +101,7 @@ class OpenAIServingChat(OpenAIServing):
                 raise TypeError(
                     f"{reasoning_parser=} has not been registered") from e
         self.tool_parser: Optional[Callable[[AnyTokenizer], ToolParser]] = None
+        self.tool_parser_config: Optional[dict] = None
         if self.enable_auto_tools:
             try:
                 if (tool_parser == "pythonic" and
@@ -109,6 +111,9 @@ class OpenAIServingChat(OpenAIServing):
                         " tool calls")
                 self.tool_parser = ToolParserManager.get_tool_parser(
                     tool_parser)
+                # Parse and store tool parser config if provided
+                if tool_parser_config:
+                    self.tool_parser_config = json.loads(tool_parser_config)
             except Exception as e:
                 raise TypeError("Error: --enable-auto-tool-choice requires "
                                 f"tool_parser:'{tool_parser}' which has not "
@@ -1074,7 +1079,18 @@ class OpenAIServingChat(OpenAIServing):
                     and self.tool_parser:
 
                 try:
-                    tool_parser = self.tool_parser(tokenizer)
+                    # Special handling for regex tool parser with config
+                    if self.tool_parser_config and hasattr(
+                            self.tool_parser, '__name__'
+                    ) and 'RegexToolParser' in self.tool_parser.__name__:
+                        # For regex parser, we need to pass config differently
+                        from vllm.entrypoints.openai.tool_parsers import (
+                            regex_tool_parser)
+                        RegexToolParser = regex_tool_parser.RegexToolParser
+                        tool_parser: ToolParser = RegexToolParser(
+                            tokenizer, config=self.tool_parser_config)
+                    else:
+                        tool_parser = self.tool_parser(tokenizer)
                 except RuntimeError as e:
                     logger.exception("Error in tool parser creation.")
                     return self.create_error_response(str(e))
@@ -1108,7 +1124,8 @@ class OpenAIServingChat(OpenAIServing):
                                       reasoning_content=reasoning_content,
                                       content=content)
 
-            if output.cumulative_logprob is not None and len(output.token_ids) > 0:
+            if output.cumulative_logprob is not None and len(
+                    output.token_ids) > 0:
                 perplexity = math.exp(-output.cumulative_logprob /
                                       len(output.token_ids))
             else:
