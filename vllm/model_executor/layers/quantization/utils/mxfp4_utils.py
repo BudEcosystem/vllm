@@ -11,6 +11,10 @@ OCP_MX_BLOCK_SIZE = 32
 def _swizzle_mxfp4(quant_tensor, scale, num_warps):
     """ weight swizzle for mxfp4 moe, used for OAI mxfp4 kernel
     """
+    if current_platform.is_cpu():
+        from vllm.cpu_kernels.mxfp4_cpu import cpu_swizzle_mxfp4
+        return cpu_swizzle_mxfp4(quant_tensor, scale, num_warps)
+    
     import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
     from triton_kernels.numerics import InFlexData
     from triton_kernels.tensor import FP4, convert_layout, wrap_torch_tensor
@@ -39,6 +43,10 @@ def _swizzle_mxfp4(quant_tensor, scale, num_warps):
 
 def _dequant_mxfp4(x: torch.Tensor, scale: torch.Tensor,
                    float_dtype: torch.dtype) -> torch.Tensor:
+    if current_platform.is_cpu():
+        from vllm.cpu_kernels.mxfp4_cpu import dequant_mxfp4_cpu
+        return dequant_mxfp4_cpu(x, scale, float_dtype)
+    
     try:
         from quark.torch.kernel import mx
     except ImportError as err:
@@ -58,6 +66,10 @@ def _dequant_mxfp4_fake(x: torch.Tensor, scale: torch.Tensor,
 
 def _quant_dequant_mxfp4(x: torch.Tensor,
                          scale_calculation_mode: str = "even") -> torch.Tensor:
+    if current_platform.is_cpu():
+        from vllm.cpu_kernels.mxfp4_cpu import quant_dequant_mxfp4_cpu
+        return quant_dequant_mxfp4_cpu(x, scale_calculation_mode)
+    
     try:
         from quark.torch.kernel import mx
     except ImportError as err:

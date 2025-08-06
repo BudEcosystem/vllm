@@ -446,12 +446,17 @@ class TorchSDPABackendImpl(AttentionImpl[TorchSDPAMetadata]):
         logits_soft_cap: Optional[float] = None,
         attn_type: str = AttentionType.DECODER,
         kv_sharing_target_layer_name: Optional[str] = None,
+        sinks: Optional[torch.Tensor] = None,
     ) -> None:
         if kv_sharing_target_layer_name is not None:
             raise NotImplementedError("KV sharing is not supported in V0.")
         if logits_soft_cap is not None:
             logger.warning_once("Torch SPDA does not support logits soft cap. "
                                 "Outputs may be slightly off.")
+        if sinks is not None:
+            logger.warning_once("Torch SPDA backend does not fully support "
+                                "attention sinks. The parameter is accepted "
+                                "but not used in computations.")
         self.paged_attn_impl = _get_paged_attn_impl()
         self.num_heads = num_heads
         self.head_size = head_size
@@ -462,6 +467,7 @@ class TorchSDPABackendImpl(AttentionImpl[TorchSDPAMetadata]):
         self.alibi_slopes = alibi_slopes
         self.sliding_window = sliding_window
         self.kv_cache_dtype = kv_cache_dtype
+        self.sinks = sinks
 
         self.num_queries_per_kv = self.num_heads // self.num_kv_heads
         self.need_mask = (self.alibi_slopes is not None
@@ -582,24 +588,48 @@ class TorchSDPABackendImpl(AttentionImpl[TorchSDPAMetadata]):
                                        prefill_meta,
                                        attn_type=attn_type)
             else:
-                # prefix-enabled attention
-                assert not self.need_mask
-                import intel_extension_for_pytorch.llm.modules as ipex_modules
-                output = torch.empty_like(query)
-                ipex_modules.PagedAttention.flash_attn_varlen_func(
-                    output[:prefill_meta.num_prefill_tokens, :, :],
-                    query[:prefill_meta.num_prefill_tokens, :, :],
-                    key_cache,
-                    value_cache,
-                    prefill_meta.prefill_query_start_loc,
-                    prefill_meta.kv_start_loc,
-                    prefill_meta.max_query_len,
-                    prefill_meta.max_kv_len,
-                    self.scale,
-                    True,
-                    prefill_meta.prefill_block_tables,
-                    self.alibi_slopes,
-                )
+                # prefix-enabled attention (chunked prefill)
+                if not _use_ipex and self.need_mask:
+                    # Fallback to regular SDPA when IPEX is not available
+                    # and masking is needed (e.g., sliding window)
+                    logger.warning_once(
+                        "Chunked prefill with sliding window attention requires "
+                        "Intel Extension for PyTorch (IPEX) for optimal performance. "
+                        "Falling back to standard SDPA implementation."
+                    )
+                    # Use the standard SDPA path for chunked prefill
+                    self._run_sdpa_forward(output,
+                                           query,
+                                           key,
+                                           value,
+                                           prefill_meta,
+                                           attn_type=attn_type)
+                elif _use_ipex:
+                    # Use IPEX optimized path
+                    import intel_extension_for_pytorch.llm.modules as ipex_modules
+                    output = torch.empty_like(query)
+                    ipex_modules.PagedAttention.flash_attn_varlen_func(
+                        output[:prefill_meta.num_prefill_tokens, :, :],
+                        query[:prefill_meta.num_prefill_tokens, :, :],
+                        key_cache,
+                        value_cache,
+                        prefill_meta.prefill_query_start_loc,
+                        prefill_meta.kv_start_loc,
+                        prefill_meta.max_query_len,
+                        prefill_meta.max_kv_len,
+                        self.scale,
+                        True,
+                        prefill_meta.prefill_block_tables,
+                        self.alibi_slopes,
+                    )
+                else:
+                    # No IPEX and no masking needed - use standard SDPA
+                    self._run_sdpa_forward(output,
+                                           query,
+                                           key,
+                                           value,
+                                           prefill_meta,
+                                           attn_type=attn_type)
 
         if decode_meta := attn_metadata.decode_metadata:
             assert attn_type != AttentionType.ENCODER_ONLY, (

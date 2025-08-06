@@ -4,10 +4,22 @@ from abc import ABC, abstractmethod
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
 
-from mcp import ClientSession
-from mcp.client.sse import sse_client
-from mcp.types import ListToolsResult
-from openai_harmony import ToolDescription, ToolNamespaceConfig
+try:
+    from mcp import ClientSession
+    from mcp.client.sse import sse_client
+    from mcp.types import ListToolsResult
+    MCP_AVAILABLE = True
+except ImportError:
+    ClientSession = None
+    sse_client = None
+    ListToolsResult = None
+    MCP_AVAILABLE = False
+
+try:
+    from openai_harmony import ToolDescription, ToolNamespaceConfig
+except ImportError:
+    ToolDescription = None
+    ToolNamespaceConfig = None
 
 from vllm.entrypoints.tool import HarmonyBrowserTool, HarmonyPythonTool, Tool
 from vllm.logger import init_logger

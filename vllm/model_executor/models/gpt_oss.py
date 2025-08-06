@@ -309,7 +309,7 @@ class GptOssForCausalLM(nn.Module):
         ep_rank_end = (ep_rank + 1) * experts_per_rank
 
         for name, weight in weights:
-            weight = weight.cuda()
+            # weight = weight.to(next(self.parameters()).device)
 
             if "gate_up_proj_blocks" in name:
                 # Handle MLP gate and up projection weights

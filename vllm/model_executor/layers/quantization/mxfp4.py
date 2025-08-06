@@ -295,7 +295,13 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
                 self.num_experts, -1),
                                       requires_grad=False)
             return
-        from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig
+        
+        # Check if we're running on CPU and use CPU implementations
+        if current_platform.is_cpu():
+            from vllm.cpu_kernels.mxfp4_cpu import FlexCtx, PrecisionConfig
+            logger.info_once("Using CPU-compatible mxfp4 implementation")
+        else:
+            from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig
 
         w13_bias = layer.w13_bias.to(torch.float32)
         w2_bias = layer.w2_bias.to(torch.float32)
@@ -310,11 +316,20 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
         else:
             num_warps = 8
 
-        w13_weight, w13_flex, w13_scale = _swizzle_mxfp4(
-            layer.w13_weight, layer.w13_weight_scale, num_warps)
-        w2_weight, w2_flex, w2_scale = _swizzle_mxfp4(layer.w2_weight,
-                                                      layer.w2_weight_scale,
-                                                      num_warps)
+        # Use CPU or GPU swizzle based on platform
+        if current_platform.is_cpu():
+            from vllm.cpu_kernels.mxfp4_cpu import cpu_swizzle_mxfp4
+            w13_weight, w13_flex, w13_scale = cpu_swizzle_mxfp4(
+                layer.w13_weight, layer.w13_weight_scale, num_warps)
+            w2_weight, w2_flex, w2_scale = cpu_swizzle_mxfp4(layer.w2_weight,
+                                                          layer.w2_weight_scale,
+                                                          num_warps)
+        else:
+            w13_weight, w13_flex, w13_scale = _swizzle_mxfp4(
+                layer.w13_weight, layer.w13_weight_scale, num_warps)
+            w2_weight, w2_flex, w2_scale = _swizzle_mxfp4(layer.w2_weight,
+                                                          layer.w2_weight_scale,
+                                                          num_warps)
 
         self.w13_precision_config = PrecisionConfig(
             weight_scale=w13_scale, flex_ctx=FlexCtx(rhs_data=w13_flex))
@@ -329,7 +344,8 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
         del layer.w2_weight
         layer.w13_weight = None
         layer.w2_weight = None
-        torch.cuda.empty_cache()
+        if not current_platform.is_cpu():
+            torch.cuda.empty_cache()
 
     def select_gemm_impl(
         self,
@@ -402,6 +418,15 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
         logical_to_physical_map: Optional[torch.Tensor] = None,
         logical_replica_count: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        # Check if we're on CPU and provide a warning
+        if current_platform.is_cpu():
+            logger.warning_once(
+                "mxfp4 quantized MoE is being used on CPU. "
+                "This will use simplified fallback implementations and "
+                "will not provide accurate results. For best performance "
+                "and accuracy, please use GPU or unquantized models on CPU."
+            )
+        
         # avoid import error when triton_kernel is not installed
         from vllm.model_executor.layers.fused_moe.triton_kernels_moe import (
             triton_kernel_moe_forward)

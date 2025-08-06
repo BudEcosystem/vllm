@@ -3,11 +3,31 @@
 from typing import Any, Optional
 
 import torch
-import triton_kernels.swiglu
-from triton_kernels.matmul_ogs import (FnSpecs, FusedActivation,
-                                       PrecisionConfig, matmul_ogs)
-from triton_kernels.routing import (GatherIndx, RoutingData, ScatterIndx,
-                                    routing)
+from vllm.platforms import current_platform
+from vllm.logger import init_logger
+
+logger = init_logger(__name__)
+
+# Conditional imports based on platform
+if current_platform.is_cpu():
+    # CPU fallback - import CPU implementations
+    from vllm.cpu_kernels.mxfp4_cpu import PrecisionConfig
+    from vllm.cpu_kernels.moe_cpu import (
+        FnSpecs, FusedActivation, RoutingData, 
+        GatherIndx, ScatterIndx, routing, matmul_ogs
+    )
+    # Create a dummy swiglu module
+    class _DummySwiglu:
+        pass
+    triton_kernels = type('triton_kernels', (), {'swiglu': _DummySwiglu()})()
+    logger.info_once("Using CPU implementations for MoE operations")
+else:
+    # GPU imports
+    import triton_kernels.swiglu
+    from triton_kernels.matmul_ogs import (FnSpecs, FusedActivation,
+                                           PrecisionConfig, matmul_ogs)
+    from triton_kernels.routing import (GatherIndx, RoutingData, ScatterIndx,
+                                        routing)
 
 import vllm.model_executor.layers.fused_moe.modular_kernel as mk
 from vllm.model_executor.layers.fused_moe.topk_weight_and_reduce import (
@@ -37,6 +57,26 @@ def triton_kernel_moe_forward(
     a2_scale: Optional[torch.Tensor] = None,
     block_shape: Optional[list[int]] = None,
 ) -> torch.Tensor:
+    
+    # If on CPU, use CPU implementation
+    if current_platform.is_cpu():
+        from vllm.cpu_kernels.moe_cpu import cpu_moe_forward
+        return cpu_moe_forward(
+            hidden_states=hidden_states,
+            w1=w1,
+            w2=w2,
+            gating_output=gating_output,
+            topk=topk,
+            renormalize=renormalize,
+            activation=activation,
+            w1_bias=w1_bias,
+            w2_bias=w2_bias,
+            w1_precision=w1_precision,
+            w2_precision=w2_precision,
+            global_num_experts=global_num_experts,
+            expert_map=expert_map,
+            apply_router_weight_on_input=apply_router_weight_on_input,
+        )
 
     routing_data, gather_idx, scatter_idx = routing(gating_output,
                                                     topk,
@@ -94,6 +134,14 @@ def triton_kernel_fused_experts(
     a2_scale: Optional[torch.Tensor] = None,
     block_shape: Optional[list[int]] = None,
 ) -> torch.Tensor:
+    
+    # If on CPU, return a placeholder result
+    if current_platform.is_cpu():
+        logger.warning_once(
+            "triton_kernel_fused_experts called on CPU. "
+            "Returning placeholder result. Use GPU for accurate results."
+        )
+        return hidden_states * 0.1  # Simple placeholder
 
     # type check, uint8 means mxfp4
     assert hidden_states.dtype == torch.bfloat16

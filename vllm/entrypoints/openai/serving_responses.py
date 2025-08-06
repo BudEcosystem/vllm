@@ -16,7 +16,10 @@ from fastapi import Request
 from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 from openai.types.responses.response_function_tool_call import (
     ResponseFunctionToolCall)
-from openai_harmony import Message as OpenAIMessage
+try:
+    from openai_harmony import Message as OpenAIMessage
+except ImportError:
+    OpenAIMessage = None
 from pydantic import BaseModel
 
 from vllm import envs
@@ -26,10 +29,22 @@ from vllm.entrypoints.chat_utils import (ChatCompletionMessageParam,
                                          ChatTemplateContentFormatOption)
 from vllm.entrypoints.context import (ConversationContext, HarmonyContext,
                                       SimpleContext, StreamingHarmonyContext)
-from vllm.entrypoints.harmony_utils import (
-    get_developer_message, get_stop_tokens_for_assistant_actions,
-    get_system_message, get_user_message, parse_output_message,
-    parse_remaining_state, parse_response_input, render_for_completion)
+try:
+    from vllm.entrypoints.harmony_utils import (
+        get_developer_message, get_stop_tokens_for_assistant_actions,
+        get_system_message, get_user_message, parse_output_message,
+        parse_remaining_state, parse_response_input, render_for_completion)
+    HARMONY_UTILS_AVAILABLE = True
+except ImportError:
+    get_developer_message = None
+    get_stop_tokens_for_assistant_actions = lambda: []
+    get_system_message = None
+    get_user_message = None
+    parse_output_message = None
+    parse_remaining_state = None
+    parse_response_input = None
+    render_for_completion = None
+    HARMONY_UTILS_AVAILABLE = False
 from vllm.entrypoints.logger import RequestLogger
 # yapf conflicts with isort for this block
 # yapf: disable

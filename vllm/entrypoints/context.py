@@ -5,11 +5,29 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Union
 
-from mcp import ClientSession
-from openai_harmony import Author, Message, Role, StreamState, TextContent
+try:
+    from mcp import ClientSession
+    MCP_AVAILABLE = True
+except ImportError:
+    ClientSession = None
+    MCP_AVAILABLE = False
 
-from vllm.entrypoints.harmony_utils import (
-    get_encoding, get_streamable_parser_for_assistant, render_for_completion)
+try:
+    from openai_harmony import Author, Message, Role, StreamState, TextContent
+except ImportError:
+    Author = None
+    Message = None
+    Role = None
+    StreamState = None
+    TextContent = None
+
+try:
+    from vllm.entrypoints.harmony_utils import (
+        get_encoding, get_streamable_parser_for_assistant, render_for_completion)
+except ImportError:
+    get_encoding = None
+    get_streamable_parser_for_assistant = None
+    render_for_completion = None
 from vllm.entrypoints.tool import Tool
 from vllm.outputs import RequestOutput
 

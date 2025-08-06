@@ -12,7 +12,15 @@ import jinja2
 import partial_json_parser
 import regex as re
 from fastapi import Request
-from openai_harmony import Message as OpenAIMessage
+
+# Conditional import for openai_harmony
+try:
+    from openai_harmony import Message as OpenAIMessage
+    HARMONY_AVAILABLE = True
+except ImportError:
+    OpenAIMessage = None
+    HARMONY_AVAILABLE = False
+    
 from pydantic import TypeAdapter
 
 from vllm.config import ModelConfig
@@ -20,10 +28,24 @@ from vllm.engine.protocol import EngineClient
 from vllm.entrypoints.chat_utils import (ChatTemplateContentFormatOption,
                                          ConversationMessage,
                                          random_tool_call_id)
-from vllm.entrypoints.harmony_utils import (
-    get_developer_message, get_stop_tokens_for_assistant_actions,
-    get_streamable_parser_for_assistant, get_system_message, parse_chat_input,
-    parse_output_into_messages, render_for_completion)
+
+# Conditional import for harmony_utils
+if HARMONY_AVAILABLE:
+    try:
+        from vllm.entrypoints.harmony_utils import (
+            get_developer_message, get_stop_tokens_for_assistant_actions,
+            get_streamable_parser_for_assistant, get_system_message, parse_chat_input,
+            parse_output_into_messages, render_for_completion)
+    except ImportError:
+        HARMONY_AVAILABLE = False
+else:
+    get_developer_message = None
+    get_stop_tokens_for_assistant_actions = lambda: []
+    get_streamable_parser_for_assistant = None
+    get_system_message = None
+    parse_chat_input = None
+    parse_output_into_messages = None
+    render_for_completion = None
 from vllm.entrypoints.logger import RequestLogger
 from vllm.entrypoints.openai.protocol import (
     ChatCompletionLogProb, ChatCompletionLogProbs,
@@ -131,7 +153,11 @@ class OpenAIServingChat(OpenAIServing):
             logger.info("Using default chat sampling params from %s: %s",
                         source, self.default_sampling_params)
 
-        self.use_harmony = model_config.hf_config.model_type == "gpt_oss"
+        self.use_harmony = (model_config.hf_config.model_type == "gpt_oss" 
+                           and HARMONY_AVAILABLE)
+        if self.use_harmony and not HARMONY_AVAILABLE:
+            logger.warning("GPT-OSS model detected but openai-harmony is not available. "
+                         "Falling back to standard chat processing.")
         if self.use_harmony:
             if "stop_token_ids" not in self.default_sampling_params:
                 self.default_sampling_params["stop_token_ids"] = []
@@ -618,6 +644,11 @@ class OpenAIServingChat(OpenAIServing):
                 for output in res.outputs:
                     i = output.index
                     tool_parser = tool_parsers[i]
+                    
+                    # Debug logging for output
+                    logger.debug(f"[Debug] Output {i}: token_ids={output.token_ids[:20] if output.token_ids else None}, "
+                                f"text='{output.text[:50] if output.text else None}...', "
+                                f"finish_reason={output.finish_reason}")
 
                     if finish_reason_sent[i]:
                         continue
@@ -638,17 +669,37 @@ class OpenAIServingChat(OpenAIServing):
 
                     if self.use_harmony:
                         harmony_parser = harmony_parsers[i]
+                        logger.debug(f"[Harmony] Processing {len(output.token_ids)} tokens for output {i}")
                         for token_id in output.token_ids:
                             harmony_parser.process(token_id)
                         # FIXME(woosuk): Support function calling
                         is_final = harmony_parser.current_channel == "final"
-                        if not (request.include_reasoning or is_final):
+                        logger.debug(f"[Harmony] Current channel: {harmony_parser.current_channel}, is_final: {is_final}")
+                        logger.debug(f"[Harmony] include_reasoning: {request.include_reasoning}, last_content_delta: {harmony_parser.last_content_delta}")
+                        
+                        # Fallback: If parser isn't in final channel and we have tokens, try raw decoding
+                        if not is_final and len(output.token_ids) > 0 and not harmony_parser.last_content_delta:
+                            try:
+                                # Try to decode the tokens directly as a fallback
+                                decoded_text = tokenizer.decode(output.token_ids, skip_special_tokens=True)
+                                if decoded_text.strip():
+                                    logger.debug(f"[Harmony] Using fallback decoding for streaming: '{decoded_text[:50]}...'")
+                                    delta_text = decoded_text
+                                else:
+                                    delta_text = ""
+                            except Exception as e:
+                                logger.debug(f"[Harmony] Fallback decoding failed: {e}")
+                                delta_text = ""
+                        elif not (request.include_reasoning or is_final):
                             # Skip the reasoning content.
+                            logger.debug(f"[Harmony] Skipping non-final content (channel: {harmony_parser.current_channel})")
                             continue
-                        delta_text = harmony_parser.last_content_delta or ""
+                        else:
+                            delta_text = harmony_parser.last_content_delta or ""
+                        logger.debug(f"[Harmony] Delta text: '{delta_text}'")
                     else:
                         delta_text = output.text
-
+                    logger.debug(f"[Debug] Delta text: '{delta_text}'")
                     if not delta_text and not output.token_ids and \
                         not previous_num_tokens[i]:
                         # Chunked prefill case, don't return empty chunks
@@ -1049,10 +1100,47 @@ class OpenAIServingChat(OpenAIServing):
                 logprobs = None
 
             if self.use_harmony:
+                # Log the raw tokens for debugging
+                logger.debug(f"[Harmony] Processing {len(token_ids)} tokens for final response")
+                logger.debug(f"[Harmony] First 50 token IDs: {token_ids[:50] if len(token_ids) > 0 else 'empty'}")
+                
                 parser = parse_output_into_messages(token_ids)
+                logger.debug(f"[Harmony] Parser: {parser}")
                 output_msgs = parser.messages
-                if len(output_msgs) == 0:
-                    # The generation has stopped during reasoning.
+                
+                # Fallback: If parser couldn't extract messages, decode tokens directly
+                if len(output_msgs) == 0 and len(token_ids) > 0:
+                    # Try to decode the raw tokens as a fallback
+                    logger.warning(
+                        "[Harmony] Parser found no complete messages. "
+                        "Falling back to raw token decoding. "
+                        "This may indicate the model is not outputting proper Harmony format on CPU."
+                    )
+                    try:
+                        # Decode the tokens directly
+                        decoded_text = tokenizer.decode(token_ids, skip_special_tokens=True)
+                        logger.info(f"[Harmony] Fallback decoded text: '{decoded_text[:200]}...'")
+                        
+                        # Use the decoded text as final content
+                        is_tool_call = False
+                        reasoning_content = None
+                        final_content = decoded_text if decoded_text.strip() else None
+                        
+                        # Check if we at least got something
+                        if not final_content:
+                            logger.warning("[Harmony] Even fallback decoding produced empty content")
+                            # Last resort: check parser's current content
+                            if parser.current_content:
+                                final_content = parser.current_content
+                                logger.info(f"[Harmony] Using parser's current content: '{final_content[:100]}...'")
+                    except Exception as e:
+                        logger.error(f"[Harmony] Failed to decode tokens: {e}")
+                        is_tool_call = False
+                        reasoning_content = None
+                        final_content = None
+                
+                elif len(output_msgs) == 0:
+                    # Original logic: The generation has stopped during reasoning.
                     is_tool_call = False
                     reasoning_content = parser.current_content
                     final_content = None
@@ -1399,7 +1487,15 @@ class OpenAIServingChat(OpenAIServing):
         for chat_msg in request.messages:
             messages.append(parse_chat_input(chat_msg))
 
+        # Log the messages for debugging
+        logger.info(f"[Harmony] Processing {len(messages)} messages")
+        for i, msg in enumerate(messages):
+            logger.info(f"[Harmony] Message {i}: {msg[:200] if isinstance(msg, str) else str(msg)[:200]}...")
+
         # Render prompt token ids.
         prompt_token_ids = render_for_completion(messages)
+        logger.info(f"[Harmony] Generated {len(prompt_token_ids)} prompt token IDs")
+        logger.debug(f"[Harmony] First 50 token IDs: {prompt_token_ids[:50]}")
+        
         engine_prompt = EngineTokensPrompt(prompt_token_ids=prompt_token_ids)
         return messages, [prompt_token_ids], [engine_prompt]

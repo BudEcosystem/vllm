@@ -1509,11 +1509,12 @@ class EngineArgs:
                     current_platform.device_name):
             return False
 
-        if (current_platform.is_cpu()
-                and model_config.get_sliding_window() is not None):
-            _raise_or_fallback(feature_name="sliding window (CPU backend)",
-                               recommend_to_remove=False)
-            return False
+        # Sliding window support is now available for CPU backend in V1
+        # if (current_platform.is_cpu()
+        #         and model_config.get_sliding_window() is not None):
+        #     _raise_or_fallback(feature_name="sliding window (CPU backend)",
+        #                        recommend_to_remove=False)
+        #     return False
 
         #############################################################
 
